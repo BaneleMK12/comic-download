@@ -40,6 +40,7 @@
             padding: 25px;
             border-radius: 10px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            box-sizing: border-box;
         }
 
         .input-group {
@@ -50,6 +51,7 @@
 
         input[type="text"] {
             flex: 1;
+            min-width: 0;
             padding: 12px;
             border: 1px solid #333;
             background: #2a2a2a;
@@ -84,6 +86,7 @@
             border-radius: 5px;
             display: none;
             font-weight: bold;
+            word-break: break-word;
         }
 
         .success { background: rgba(0, 212, 255, 0.1); color: var(--accent); border: 1px solid var(--accent); }
@@ -107,6 +110,7 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+            gap: 10px;
             border-left: 4px solid var(--accent);
         }
 
@@ -144,7 +148,7 @@
     <div class="container">
         <div class="input-group">
             <input type="text" id="mangaUrl" placeholder="Paste Manga Chapter URL (e.g., https://asurascans.com/...)" value="https://asurascans.com/comics/reincarnators-stream-7de80a82/chapter/1">
-            <button id="fetchBtn" onclick="fetchChapters()">Fetch</button>
+            <button id="fetchBtn">Fetch</button>
         </div>
 
         <div id="loader" class="loader"></div>
@@ -157,11 +161,13 @@
     </div>
 
     <script>
-        // CONFIGURATION: Ensure this matches your deployed Worker URL exactly
-        const PROXY_API_URL = 'https://comic-download.makhanyabanele12.workers.dev'; 
+        // CONFIGURATION: must match your deployed Worker URL exactly
+        const PROXY_API_URL = 'https://comic-download.makhanyabanele12.workers.dev';
+
+        document.getElementById('fetchBtn').addEventListener('click', fetchChapters);
 
         async function fetchChapters() {
-            const urlInput = document.getElementById('mangaUrl').value;
+            const urlInput = document.getElementById('mangaUrl').value.trim();
             const btn = document.getElementById('fetchBtn');
             const loader = document.getElementById('loader');
             const statusDiv = document.getElementById('status');
@@ -181,14 +187,9 @@
             list.innerHTML = '';
 
             try {
-                console.log(`Fetching from: ${PROXY_API_URL}/scrape`);
-                
                 const response = await fetch(`${PROXY_API_URL}/scrape`, {
                     method: 'POST',
-                    headers: { 
-                        'Content-Type': 'application/json',
-                        'Access-Control-Allow-Origin': '*' 
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ url: urlInput })
                 });
 
@@ -207,10 +208,10 @@
                 }
 
             } catch (error) {
-                console.error("Detailed Error:", error);
+                console.error('Detailed Error:', error);
                 let msg = error.message;
-                if (error.message.includes('Failed to fetch')) {
-                    msg = "Failed to fetch. Check if the Worker URL is correct and CORS is enabled. Also ensure you are not opening the HTML file directly from 'file://'.";
+                if (msg.includes('Failed to fetch')) {
+                    msg = 'Failed to fetch. Check that the Worker URL is correct and the Worker is deployed.';
                 }
                 showStatus(`Error: ${msg}`, 'error');
             } finally {
@@ -222,14 +223,21 @@
         function renderChapters(chapters, title) {
             const resultsDiv = document.getElementById('results');
             const list = document.getElementById('chapterList');
-            
+
             chapters.forEach((chapter, index) => {
                 const li = document.createElement('li');
                 li.className = 'chapter-item';
-                li.innerHTML = `
-                    <span>${index + 1}. ${chapter.title}</span>
-                    <button class="download-btn" onclick="downloadChapter('${title}', ${index})">Download</button>
-                `;
+
+                const label = document.createElement('span');
+                label.textContent = `${index + 1}. ${chapter.title}`;
+
+                const btn = document.createElement('button');
+                btn.className = 'download-btn';
+                btn.textContent = 'Download';
+                btn.addEventListener('click', () => downloadChapter(title, index));
+
+                li.appendChild(label);
+                li.appendChild(btn);
                 list.appendChild(li);
             });
 
