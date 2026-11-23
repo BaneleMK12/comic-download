@@ -1,615 +1,849 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MangaScraper - Download Manager</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
-    <style>
-        :root {
-            --bg-color: #121212;
-            --card-bg: #1e1e1e;
-            --text-main: #e0e0e0;
-            --accent: #00d4ff;
-            --accent-hover: #00a3cc;
-            --error: #ff4d4d;
-        }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manhwa Downloader</title>
+<meta name="description" content="Download manhwa chapters as PDF.">
+<meta name="theme-color" content="#050810">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Sora:wght@300;400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<style>
+  :root {
+    --bg: #050810;
+    --panel: #0b1220;
+    --panel-2: #101a2e;
+    --line: #1c2a44;
+    --text: #dce8ff;
+    --muted: #8a9bbd;
+    --cyan: #38e8ff;
+    --violet: #8a6cff;
+    --pink: #ff3d8b;
+    --head: "Chakra Petch", "Segoe UI", system-ui, sans-serif;
+    --body: "Sora", "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--body);
+    font-weight: 300;
+    line-height: 1.65;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
+  }
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
 
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: var(--bg-color);
-            color: var(--text-main);
-            margin: 0;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            min-height: 100vh;
-        }
+  /* ---------- Background artwork ---------- */
+  .bg {
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background: var(--bg) url("https://i.ibb.co/M5B4Pxy0/file-0000000033608243a9457973cb00acf2.png") center / cover no-repeat;
+  }
+  @media (orientation: portrait) {
+    .bg { background-image: url("https://i.ibb.co/DHsD7SC8/file-0000000033608243a9457973cb00acf2.jpg"); }
+  }
+  /* darkens the artwork so text and cards stay readable */
+  .bg::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(5,8,16,.55), rgba(5,8,16,.70) 60%, rgba(5,8,16,.88));
+  }
 
-        h1 {
-            color: var(--accent);
-            text-transform: uppercase;
-            letter-spacing: 2px;
-            margin-bottom: 30px;
-        }
+  /* ---------- Background network canvas ---------- */
+  #net {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    z-index: 0; pointer-events: none;
+  }
+  .veil {
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background:
+      radial-gradient(ellipse at 50% 0%, rgba(56,232,255,.10), transparent 60%),
+      radial-gradient(ellipse at 100% 100%, rgba(138,108,255,.10), transparent 55%);
+  }
+  main, footer { position: relative; z-index: 1; }
 
-        .container {
-            width: 100%;
-            max-width: 800px;
-            background: var(--card-bg);
-            padding: 25px;
-            border-radius: 10px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
-            box-sizing: border-box;
-        }
+  /* ---------- Hero ---------- */
+  .hero {
+    padding: clamp(56px, 11vh, 120px) clamp(20px, 5vw, 56px) clamp(36px, 6vh, 64px);
+    max-width: 1200px; margin: 0 auto; width: 100%;
+  }
+  .hero h1 {
+    font-family: var(--head); font-weight: 700;
+    font-size: clamp(2.2rem, 9vw, 6rem);
+    line-height: .98; letter-spacing: -.01em;
+    cursor: default; -webkit-tap-highlight-color: transparent;
+  }
+  .hero .g {
+    position: relative; display: inline-block;
+    background: linear-gradient(100deg, #fff 20%, var(--cyan) 60%, var(--violet) 100%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; color: transparent;
+    animation: sweep 1.8s cubic-bezier(.2,.7,.2,1) both;
+  }
+  @keyframes sweep {
+    from { background-position: 100% 0; opacity: 0; transform: translateY(14px); }
+    to   { background-position: 0 0; opacity: 1; transform: none; }
+  }
 
-        .input-group {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
-        }
+  /* Glitch: two colour-split copies sliced and shifted for a short burst */
+  .hero .g::before, .hero .g::after {
+    content: attr(data-text);
+    position: absolute; inset: 0;
+    background: none; opacity: 0; pointer-events: none;
+    -webkit-text-fill-color: currentColor;
+  }
+  .hero .g::before { color: var(--cyan); }
+  .hero .g::after  { color: var(--pink); }
+  .settled .g { animation: none; }
+  .glitch .g { animation: jitter .5s steps(1, end); }
+  .glitch .g::before { animation: slice-a .5s steps(1, end); mix-blend-mode: screen; }
+  .glitch .g::after  { animation: slice-b .5s steps(1, end); mix-blend-mode: screen; }
+  .glitch .g + br + .g { animation-delay: .06s; }
 
-        input[type="text"] {
-            flex: 1;
-            min-width: 0;
-            padding: 12px;
-            border: 1px solid #333;
-            background: #2a2a2a;
-            color: white;
-            border-radius: 5px;
-            font-size: 16px;
-        }
+  @keyframes jitter {
+    0%   { transform: none; }
+    15%  { transform: translateX(-3px) skewX(-6deg); }
+    30%  { transform: translateX(4px); }
+    45%  { transform: translateX(-2px) skewX(4deg); }
+    60%  { transform: none; }
+    75%  { transform: translateX(3px) skewX(-3deg); }
+    100% { transform: none; }
+  }
+  @keyframes slice-a {
+    0%   { opacity: 1; clip-path: inset(10% 0 70% 0); transform: translate(-6px, 0); }
+    15%  { opacity: 1; clip-path: inset(55% 0 20% 0); transform: translate(5px, 1px); }
+    30%  { opacity: 1; clip-path: inset(30% 0 45% 0); transform: translate(-8px, 0); }
+    45%  { opacity: 1; clip-path: inset(75% 0 5% 0);  transform: translate(4px, -1px); }
+    60%  { opacity: 1; clip-path: inset(0 0 85% 0);   transform: translate(-5px, 0); }
+    80%  { opacity: 1; clip-path: inset(45% 0 35% 0); transform: translate(6px, 0); }
+    100% { opacity: 0; }
+  }
+  @keyframes slice-b {
+    0%   { opacity: 1; clip-path: inset(60% 0 15% 0); transform: translate(6px, 0); }
+    20%  { opacity: 1; clip-path: inset(15% 0 65% 0); transform: translate(-5px, 0); }
+    35%  { opacity: 1; clip-path: inset(80% 0 0 0);   transform: translate(8px, 1px); }
+    50%  { opacity: 1; clip-path: inset(35% 0 40% 0); transform: translate(-4px, 0); }
+    70%  { opacity: 1; clip-path: inset(5% 0 80% 0);  transform: translate(5px, 0); }
+    100% { opacity: 0; }
+  }
+  .hero p {
+    margin-top: 22px; max-width: 46ch; color: var(--muted);
+    font-size: clamp(1rem, 2.4vw, 1.15rem);
+  }
+  .scan {
+    margin-top: 34px; height: 1px; width: 100%;
+    background: linear-gradient(90deg, var(--cyan), transparent 70%);
+    transform-origin: left; animation: draw 1.4s .5s cubic-bezier(.2,.7,.2,1) both;
+  }
+  @keyframes draw { from { transform: scaleX(0); } }
 
-        button {
-            padding: 12px 24px;
-            background: var(--accent);
-            color: #000;
-            border: none;
-            border-radius: 5px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
+  /* ---------- Layout ---------- */
+  main { flex: 1; }
+  .wrap {
+    max-width: 1200px; margin: 0 auto; width: 100%;
+    padding: 0 clamp(20px, 5vw, 56px) clamp(60px, 10vh, 110px);
+  }
 
-        button:hover { background: var(--accent-hover); }
-        button:disabled { background: #555; cursor: not-allowed; }
+  /* Panel with corner brackets (same look as the project cards) */
+  .panel {
+    position: relative;
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: clamp(18px, 3vw, 28px);
+    animation: rise .9s .7s cubic-bezier(.2,.7,.2,1) both;
+  }
+  .panel::before, .panel::after {
+    content: ""; position: absolute; width: 18px; height: 18px;
+    border: 2px solid var(--cyan); pointer-events: none;
+  }
+  .panel::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
+  .panel::after  { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
+  @keyframes rise { from { opacity: 0; transform: translateY(26px); } }
 
-        #status {
-            margin-top: 20px;
-            padding: 15px;
-            border-radius: 5px;
-            display: none;
-            font-weight: bold;
-            word-break: break-word;
-        }
+  .input-group { display: flex; gap: 12px; }
 
-        .success { background: rgba(0, 212, 255, 0.1); color: var(--accent); border: 1px solid var(--accent); }
-        .error { background: rgba(255, 77, 77, 0.1); color: var(--error); border: 1px solid var(--error); }
+  input[type="text"] {
+    flex: 1; min-width: 0; min-height: 48px; padding: 0 14px;
+    font-family: var(--body); font-weight: 400; font-size: 16px;
+    color: var(--text); background: rgba(5,8,16,.7);
+    border: 1px solid var(--line); border-radius: 2px;
+    transition: border-color .25s, box-shadow .25s;
+  }
+  input[type="text"]::placeholder { color: #55678a; }
+  input[type="text"]:focus { outline: none; border-color: var(--cyan); box-shadow: 0 0 18px -6px var(--cyan); }
 
-        #results { margin-top: 20px; display: none; }
+  /* Primary button (clipped corners) */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-height: 48px; padding: 0 28px; border: 0; cursor: pointer;
+    font-family: var(--head); font-weight: 700; font-size: 1rem; letter-spacing: .04em;
+    color: #031018;
+    background: linear-gradient(100deg, var(--cyan), #7fb4ff);
+    clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
+    transition: filter .25s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .btn:hover, .btn:active { filter: brightness(1.12) saturate(1.1); }
+  .btn:disabled { filter: grayscale(1) brightness(.6); cursor: not-allowed; }
 
-        .results-head {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 10px;
-        }
+  .option-row {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px;
+    margin-top: 18px; font-size: .9rem; color: var(--muted);
+  }
+  .option-row label { font-family: var(--head); font-weight: 600; letter-spacing: .03em; color: var(--text); }
+  select {
+    min-height: 44px; padding: 0 12px;
+    font-family: var(--head); font-weight: 600; font-size: .95rem;
+    color: var(--text); background: rgba(5,8,16,.7);
+    border: 1px solid var(--line); border-radius: 2px; cursor: pointer;
+  }
+  select:focus { outline: none; border-color: var(--cyan); }
 
-        .chapter-list { list-style: none; padding: 0; }
+  .loader {
+    border: 3px solid var(--line); border-top-color: var(--cyan);
+    border-radius: 50%; width: 30px; height: 30px;
+    animation: spin 1s linear infinite;
+    display: none; margin: 22px auto 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
-        .chapter-item {
-            background: #2a2a2a;
-            margin-bottom: 10px;
-            padding: 15px;
-            border-radius: 5px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 10px;
-            border-left: 4px solid var(--accent);
-        }
+  #status {
+    margin-top: 20px; padding: 14px 16px; border-radius: 2px;
+    display: none; font-weight: 500; font-size: .92rem; word-break: break-word;
+  }
+  .success { background: rgba(56,232,255,.08); color: var(--cyan); border: 1px solid rgba(56,232,255,.5); }
+  .error   { background: rgba(255,61,139,.08); color: #ff7fb0; border: 1px solid rgba(255,61,139,.55); }
 
-        .download-btn {
-            background: transparent;
-            border: 1px solid var(--accent);
-            color: var(--accent);
-            padding: 8px 16px;
-            font-size: 14px;
-            min-width: 110px;
-        }
+  /* ---------- Chapters ---------- */
+  #results { margin-top: clamp(36px, 6vh, 56px); display: none; }
+  .section-head {
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+    gap: 14px 18px; margin-bottom: 22px;
+  }
+  .section-head h2 { font-family: var(--head); font-weight: 600; font-size: 1.5rem; line-height: 1.25; }
+  .section-head .count { display: block; color: var(--muted); font-size: .85rem; font-weight: 300; }
 
-        .download-btn:hover { background: var(--accent); color: #000; }
-        .download-btn:disabled { background: transparent; color: #888; border-color: #555; }
+  .filter {
+    min-height: 44px; padding: 0 20px;
+    font-family: var(--head); font-weight: 600; font-size: .95rem; letter-spacing: .03em;
+    color: var(--muted); background: rgba(11,18,32,.75);
+    border: 1px solid var(--line); border-radius: 2px; cursor: pointer;
+    transition: color .25s, border-color .25s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .filter:hover { color: var(--text); border-color: #2c4670; }
 
-        .small-btn { min-width: 0; padding: 6px 12px; font-size: 12px; }
+  .chapter-list {
+    list-style: none; display: grid; gap: 12px;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  }
+  .chapter-item {
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+    gap: 10px 12px; padding: 12px 14px;
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    border: 1px solid var(--line); border-left: 3px solid var(--cyan); border-radius: 3px;
+    transition: border-color .25s, box-shadow .25s;
+  }
+  .chapter-item:hover { border-color: #2c4670; border-left-color: var(--cyan); box-shadow: 0 10px 30px -18px rgba(56,232,255,.4); }
+  .chapter-item > span { flex: 1 1 120px; min-width: 0; font-weight: 400; }
+  .actions { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
 
-        .actions { display: flex; gap: 8px; align-items: center; }
+  .download-btn {
+    min-height: 44px; min-width: 120px; padding: 0 16px;
+    font-family: var(--head); font-weight: 700; font-size: .92rem; letter-spacing: .04em;
+    color: var(--cyan); background: transparent;
+    border: 1px solid var(--cyan); border-radius: 2px; cursor: pointer;
+    transition: background .25s, color .25s, box-shadow .25s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .download-btn:hover { background: var(--cyan); color: #031018; box-shadow: 0 0 18px -6px var(--cyan); }
+  .download-btn:disabled { background: transparent; color: var(--muted); border-color: var(--line); box-shadow: none; cursor: not-allowed; }
 
-        .cancel-btn {
-            display: none;
-            min-width: 0;
-            padding: 8px 12px;
-            border-color: var(--error);
-            color: var(--error);
-        }
-        .cancel-btn:hover { background: var(--error); color: #000; }
+  .cancel-btn { display: none; min-width: 0; border-color: var(--pink); color: var(--pink); }
+  .cancel-btn:hover { background: var(--pink); color: #1a0510; box-shadow: 0 0 18px -6px var(--pink); }
+  .cancel-btn:disabled { color: var(--muted); border-color: var(--line); }
 
-        .option-row {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 20px;
-            font-size: 14px;
-        }
+  /* ---------- Footer ---------- */
+  footer {
+    border-top: 1px solid rgba(28,42,68,.8);
+    padding: 26px clamp(20px, 5vw, 56px);
+    text-align: center; font-size: .9rem; color: var(--muted);
+    background: rgba(5,8,16,.6);
+  }
+  footer a { color: var(--cyan); text-decoration: none; border-bottom: 1px solid transparent; transition: border-color .2s; }
+  footer a:hover { border-color: var(--cyan); }
 
-        select {
-            padding: 8px 10px;
-            background: #2a2a2a;
-            color: white;
-            border: 1px solid #333;
-            border-radius: 5px;
-            font-size: 14px;
-        }
+  @media (max-width: 480px) {
+    .input-group { flex-direction: column; }
+    .btn { width: 100%; }
+  }
 
-        .loader {
-            border: 4px solid #333;
-            border-top: 4px solid var(--accent);
-            border-radius: 50%;
-            width: 30px;
-            height: 30px;
-            animation: spin 1s linear infinite;
-            display: none;
-            margin: 0 auto;
-        }
-
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-    </style>
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+    html { scroll-behavior: auto; }
+  }
+</style>
 </head>
 <body>
 
-    <h1>MangaScraper</h1>
+<div class="bg" aria-hidden="true"></div>
+<canvas id="net" aria-hidden="true"></canvas>
+<div class="veil" aria-hidden="true"></div>
 
-    <div class="container">
-        <div class="input-group">
-            <input type="text" id="mangaUrl" placeholder="Paste a Vortex or Asura series/chapter URL" value="https://vortexscans.org/series/became-the-patron-of-villains">
-            <button id="fetchBtn">Fetch</button>
+<main id="top">
+  <section class="hero">
+    <h1 id="title" aria-label="MANHWA DOWNLOADER"><span class="g" data-text="MANHWA" aria-hidden="true">MANHWA</span><br><span class="g" data-text="DOWNLOADER" aria-hidden="true">DOWNLOADER</span></h1>
+    <p>Paste a series or chapter link, pick a chapter and save it as a PDF.</p>
+    <div class="scan"></div>
+  </section>
+
+  <div class="wrap">
+    <section class="panel">
+      <div class="input-group">
+        <input type="text" id="mangaUrl" placeholder="Paste a Vortex or Asura series/chapter URL" value="https://vortexscans.org/series/became-the-patron-of-villains" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button id="fetchBtn" class="btn" type="button">Fetch</button>
+      </div>
+
+      <div class="option-row">
+        <label for="quality">PDF quality</label>
+        <select id="quality">
+          <option value="1">100% (Original)</option>
+          <option value="0.9">90%</option>
+          <option value="0.7">70%</option>
+          <option value="0.5">50%</option>
+        </select>
+      </div>
+
+      <div id="loader" class="loader"></div>
+      <div id="status" role="status"></div>
+    </section>
+
+    <section id="results" aria-label="Chapters">
+      <div class="section-head">
+        <div>
+          <h2 id="seriesTitle">Chapters</h2>
+          <span class="count" id="count"></span>
         </div>
+        <button id="clearBtn" class="filter" type="button">Clear saved</button>
+      </div>
+      <ul id="chapterList" class="chapter-list"></ul>
+    </section>
+  </div>
+</main>
 
-        <div class="option-row">
-            <label for="quality">PDF quality</label>
-            <select id="quality">
-                <option value="1">100% (Original)</option>
-                <option value="0.9">90%</option>
-                <option value="0.7">70%</option>
-                <option value="0.5">50%</option>
-            </select>
-        </div>
+<footer>
+  <a href="mailto:mkdev4360@gmail.com">mkdev4360@gmail.com</a>
+</footer>
 
-        <div id="loader" class="loader"></div>
-        <div id="status"></div>
+<script>
+    // CONFIGURATION: must match your deployed Worker URL exactly
+    const PROXY_API_URL = 'https://comic-download.makhanyabanele12.workers.dev';
+    const PARALLEL_IMAGES = 8;       // images downloaded at once
+    const MAX_PDF_DIM = 14400;       // PDF page size limit (points)
+    const STATE_KEY = 'ms_state_v1';
 
-        <div id="results">
-            <div class="results-head">
-                <h3>Available Chapters</h3>
-                <button id="clearBtn" class="download-btn small-btn">Clear saved</button>
-            </div>
-            <ul id="chapterList" class="chapter-list"></ul>
-        </div>
-    </div>
+    // ---------- Saved state (survives closing / killing the browser) ----------
+    // localStorage: the chapter list + which chapters are finished.
+    // IndexedDB: page images of chapters that are partly downloaded (for Resume).
+    let state = { url: '', title: '', chapters: [] };
+    const buttons = new Map(); // chapter url -> button
 
-    <script>
-        // CONFIGURATION: must match your deployed Worker URL exactly
-        const PROXY_API_URL = 'https://comic-download.makhanyabanele12.workers.dev';
-        const PARALLEL_IMAGES = 8;       // images downloaded at once
-        const MAX_PDF_DIM = 14400;       // PDF page size limit (points)
-        const STATE_KEY = 'ms_state_v1';
+    // Finished chapters, remembered for EVERY series you've used (chapter URLs are unique)
+    const DONE_KEY = 'ms_done_v1';
+    let doneMap = {};
 
-        // ---------- Saved state (survives closing / killing the browser) ----------
-        // localStorage: the chapter list + which chapters are finished.
-        // IndexedDB: page images of chapters that are partly downloaded (for Resume).
-        let state = { url: '', title: '', chapters: [] };
-        const buttons = new Map(); // chapter url -> button
+    function saveDone() {
+        try { localStorage.setItem(DONE_KEY, JSON.stringify(doneMap)); } catch (e) {}
+    }
 
-        // Finished chapters, remembered for EVERY series you've used (chapter URLs are unique)
-        const DONE_KEY = 'ms_done_v1';
-        let doneMap = {};
+    function loadDone() {
+        try { doneMap = JSON.parse(localStorage.getItem(DONE_KEY) || '{}') || {}; } catch (e) { doneMap = {}; }
+    }
 
-        function saveDone() {
-            try { localStorage.setItem(DONE_KEY, JSON.stringify(doneMap)); } catch (e) {}
-        }
+    function saveState() {
+        try { localStorage.setItem(STATE_KEY, JSON.stringify(state)); } catch (e) {}
+    }
 
-        function loadDone() {
-            try { doneMap = JSON.parse(localStorage.getItem(DONE_KEY) || '{}') || {}; } catch (e) { doneMap = {}; }
-        }
-
-        function saveState() {
-            try { localStorage.setItem(STATE_KEY, JSON.stringify(state)); } catch (e) {}
-        }
-
-        function loadState() {
-            try {
-                const s = JSON.parse(localStorage.getItem(STATE_KEY) || 'null');
-                if (s && Array.isArray(s.chapters)) {
-                    state = { url: s.url || '', title: s.title || '', chapters: s.chapters };
-                    // Carry over Done marks saved by the previous version
-                    if (s.done && Object.keys(s.done).length) {
-                        Object.assign(doneMap, s.done);
-                        saveDone();
-                        saveState();
-                    }
-                }
-            } catch (e) {}
-        }
-
-        const dbPromise = new Promise(resolve => {
-            try {
-                const req = indexedDB.open('mangascraper', 1);
-                req.onupgradeneeded = () => {
-                    req.result.createObjectStore('pages');
-                    req.result.createObjectStore('meta');
-                };
-                req.onsuccess = () => resolve(req.result);
-                req.onerror = () => resolve(null);
-            } catch (e) { resolve(null); }
-        });
-
-        // Never throws: if IndexedDB is unavailable, downloads still work, just without Resume.
-        async function idb(storeName, mode, fn) {
-            try {
-                const db = await dbPromise;
-                if (!db) return undefined;
-                return await new Promise((resolve, reject) => {
-                    const tx = db.transaction(storeName, mode);
-                    const req = fn(tx.objectStore(storeName));
-                    tx.oncomplete = () => resolve(req ? req.result : undefined);
-                    tx.onerror = () => reject(tx.error);
-                    tx.onabort = () => reject(tx.error);
-                });
-            } catch (e) { return undefined; }
-        }
-
-        const savePage   = (url, i, blob) => idb('pages', 'readwrite', s => s.put(blob, [url, i]));
-        const getPage    = (url, i)       => idb('pages', 'readonly',  s => s.get([url, i]));
-        const countPages = (url)          => idb('pages', 'readonly',  s => s.count(IDBKeyRange.bound([url, 0], [url, Infinity])));
-        const saveMeta   = (url, images)  => idb('meta',  'readwrite', s => s.put(images, url));
-        const getMeta    = (url)          => idb('meta',  'readonly',  s => s.get(url));
-
-        async function clearChapterCache(url) {
-            await idb('pages', 'readwrite', s => s.delete(IDBKeyRange.bound([url, 0], [url, Infinity])));
-            await idb('meta', 'readwrite', s => s.delete(url));
-        }
-
-        async function clearAllCache() {
-            await idb('pages', 'readwrite', s => s.clear());
-            await idb('meta', 'readwrite', s => s.clear());
-        }
-
-        // ---------- UI ----------
-        document.getElementById('fetchBtn').addEventListener('click', fetchChapters);
-
-        // Remember the chosen quality
-        const qualityEl = document.getElementById('quality');
+    function loadState() {
         try {
-            const q = localStorage.getItem('ms_quality');
-            if (q && [...qualityEl.options].some(o => o.value === q)) qualityEl.value = q;
-        } catch (e) {}
-        qualityEl.addEventListener('change', () => {
-            try { localStorage.setItem('ms_quality', qualityEl.value); } catch (e) {}
-        });
-
-        document.getElementById('clearBtn').addEventListener('click', async () => {
-            if (!confirm('Clear the saved chapter list, download history (Done marks) and any partly downloaded pages?')) return;
-            try { localStorage.removeItem(STATE_KEY); localStorage.removeItem(DONE_KEY); } catch (e) {}
-            await clearAllCache();
-            doneMap = {};
-            state = { url: '', title: '', chapters: [] };
-            buttons.clear();
-            document.getElementById('chapterList').innerHTML = '';
-            document.getElementById('results').style.display = 'none';
-            document.getElementById('status').style.display = 'none';
-        });
-
-        async function fetchChapters() {
-            const urlInput = document.getElementById('mangaUrl').value.trim();
-            const btn = document.getElementById('fetchBtn');
-            const loader = document.getElementById('loader');
-            const statusDiv = document.getElementById('status');
-            const resultsDiv = document.getElementById('results');
-            const list = document.getElementById('chapterList');
-
-            if (!urlInput) {
-                showStatus('Please enter a valid URL.', 'error');
-                return;
-            }
-
-            btn.disabled = true;
-            loader.style.display = 'block';
-            statusDiv.style.display = 'none';
-            resultsDiv.style.display = 'none';
-            list.innerHTML = '';
-
-            try {
-                const response = await fetch(`${PROXY_API_URL}/scrape`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url: urlInput })
-                });
-
-                if (!response.ok) {
-                    const errText = await response.text().catch(() => 'No text');
-                    throw new Error(`Server Error: ${response.status} - ${errText}`);
-                }
-
-                const data = await response.json();
-
-                if (data.success && Array.isArray(data.chapters) && data.chapters.length > 0) {
-                    state = {
-                        url: urlInput,
-                        title: data.title,
-                        chapters: data.chapters
-                    };
+            const s = JSON.parse(localStorage.getItem(STATE_KEY) || 'null');
+            if (s && Array.isArray(s.chapters)) {
+                state = { url: s.url || '', title: s.title || '', chapters: s.chapters };
+                // Carry over Done marks saved by the previous version
+                if (s.done && Object.keys(s.done).length) {
+                    Object.assign(doneMap, s.done);
+                    saveDone();
                     saveState();
-                    renderChapters(data.chapters, data.title);
-                    showStatus(`Found ${data.chapters.length} chapters for ${data.title}`, 'success');
-                } else {
-                    throw new Error(data.error || 'No chapters found or invalid response structure');
                 }
-
-            } catch (error) {
-                console.error('Detailed Error:', error);
-                let msg = error.message;
-                if (msg.includes('Failed to fetch')) {
-                    msg = 'Failed to fetch. Check that the Worker URL is correct and the Worker is deployed.';
-                }
-                showStatus(`Error: ${msg}`, 'error');
-            } finally {
-                btn.disabled = false;
-                loader.style.display = 'none';
             }
+        } catch (e) {}
+    }
+
+    // (database name kept as 'mangascraper' so already-saved pages still work)
+    const dbPromise = new Promise(resolve => {
+        try {
+            const req = indexedDB.open('mangascraper', 1);
+            req.onupgradeneeded = () => {
+                req.result.createObjectStore('pages');
+                req.result.createObjectStore('meta');
+            };
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => resolve(null);
+        } catch (e) { resolve(null); }
+    });
+
+    // Never throws: if IndexedDB is unavailable, downloads still work, just without Resume.
+    async function idb(storeName, mode, fn) {
+        try {
+            const db = await dbPromise;
+            if (!db) return undefined;
+            return await new Promise((resolve, reject) => {
+                const tx = db.transaction(storeName, mode);
+                const req = fn(tx.objectStore(storeName));
+                tx.oncomplete = () => resolve(req ? req.result : undefined);
+                tx.onerror = () => reject(tx.error);
+                tx.onabort = () => reject(tx.error);
+            });
+        } catch (e) { return undefined; }
+    }
+
+    const savePage   = (url, i, blob) => idb('pages', 'readwrite', s => s.put(blob, [url, i]));
+    const getPage    = (url, i)       => idb('pages', 'readonly',  s => s.get([url, i]));
+    const countPages = (url)          => idb('pages', 'readonly',  s => s.count(IDBKeyRange.bound([url, 0], [url, Infinity])));
+    const saveMeta   = (url, images)  => idb('meta',  'readwrite', s => s.put(images, url));
+    const getMeta    = (url)          => idb('meta',  'readonly',  s => s.get(url));
+
+    async function clearChapterCache(url) {
+        await idb('pages', 'readwrite', s => s.delete(IDBKeyRange.bound([url, 0], [url, Infinity])));
+        await idb('meta', 'readwrite', s => s.delete(url));
+    }
+
+    async function clearAllCache() {
+        await idb('pages', 'readwrite', s => s.clear());
+        await idb('meta', 'readwrite', s => s.clear());
+    }
+
+    // ---------- UI ----------
+    document.getElementById('fetchBtn').addEventListener('click', fetchChapters);
+    document.getElementById('mangaUrl').addEventListener('keydown', e => {
+        if (e.key === 'Enter') fetchChapters();
+    });
+
+    // Remember the chosen quality
+    const qualityEl = document.getElementById('quality');
+    try {
+        const q = localStorage.getItem('ms_quality');
+        if (q && [...qualityEl.options].some(o => o.value === q)) qualityEl.value = q;
+    } catch (e) {}
+    qualityEl.addEventListener('change', () => {
+        try { localStorage.setItem('ms_quality', qualityEl.value); } catch (e) {}
+    });
+
+    document.getElementById('clearBtn').addEventListener('click', async () => {
+        if (!confirm('Clear the saved chapter list, download history (Done marks) and any partly downloaded pages?')) return;
+        try { localStorage.removeItem(STATE_KEY); localStorage.removeItem(DONE_KEY); } catch (e) {}
+        await clearAllCache();
+        doneMap = {};
+        state = { url: '', title: '', chapters: [] };
+        buttons.clear();
+        document.getElementById('chapterList').innerHTML = '';
+        document.getElementById('results').style.display = 'none';
+        document.getElementById('status').style.display = 'none';
+    });
+
+    async function fetchChapters() {
+        const urlInput = document.getElementById('mangaUrl').value.trim();
+        const btn = document.getElementById('fetchBtn');
+        const loader = document.getElementById('loader');
+        const statusDiv = document.getElementById('status');
+        const resultsDiv = document.getElementById('results');
+        const list = document.getElementById('chapterList');
+
+        if (!urlInput) {
+            showStatus('Please enter a valid URL.', 'error');
+            return;
         }
 
-        function renderChapters(chapters, title) {
-            const resultsDiv = document.getElementById('results');
-            const list = document.getElementById('chapterList');
-            list.innerHTML = '';
-            buttons.clear();
+        btn.disabled = true;
+        loader.style.display = 'block';
+        statusDiv.style.display = 'none';
+        resultsDiv.style.display = 'none';
+        list.innerHTML = '';
 
-            chapters.forEach((chapter, index) => {
-                const li = document.createElement('li');
-                li.className = 'chapter-item';
-
-                const label = document.createElement('span');
-                label.textContent = `${index + 1}. ${chapter.title}`;
-
-                const btn = document.createElement('button');
-                btn.className = 'download-btn';
-                btn.textContent = doneMap[chapter.url] ? 'Done ✓' : 'Download';
-                btn.addEventListener('click', () => {
-                    // Already downloaded? Ask before saving a second copy.
-                    if (btn.textContent === 'Done ✓' &&
-                        !confirm(`${chapter.title} was already downloaded. Download it again?`)) return;
-                    downloadChapter(title, chapter, btn);
-                });
-                buttons.set(chapter.url, btn);
-
-                const cancelBtn = document.createElement('button');
-                cancelBtn.className = 'download-btn cancel-btn';
-                cancelBtn.textContent = 'Cancel';
-                btn._cancelBtn = cancelBtn;
-
-                const actions = document.createElement('div');
-                actions.className = 'actions';
-                actions.appendChild(cancelBtn);
-                actions.appendChild(btn);
-
-                li.appendChild(label);
-                li.appendChild(actions);
-                list.appendChild(li);
+        try {
+            const response = await fetch(`${PROXY_API_URL}/scrape`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: urlInput })
             });
 
-            resultsDiv.style.display = 'block';
-            markResumable();
-        }
-
-        // Show "Resume 6/14" on chapters that were partly downloaded before the browser closed
-        async function markResumable() {
-            const urls = await idb('meta', 'readonly', s => s.getAllKeys());
-            if (!urls) return;
-            for (const url of urls) {
-                const btn = buttons.get(url);
-                if (!btn || btn.disabled) continue;
-                const meta = await getMeta(url);
-                const n = await countPages(url);
-                if (meta && n > 0 && !btn.disabled) btn.textContent = `Resume ${n}/${meta.length}`;
-            }
-        }
-
-        // Turn a downloaded image blob into a pdf-lib image.
-        // quality 1 (Original): JPEG and PNG are embedded untouched; WebP/AVIF must be
-        //   converted, so they're re-encoded to JPEG at 92%.
-        // quality < 1: every page is re-encoded to JPEG at that quality (smaller file).
-        async function embedImage(pdfDoc, blob, quality) {
-            const bytes = new Uint8Array(await blob.arrayBuffer());
-            const isJpg = bytes[0] === 0xFF && bytes[1] === 0xD8;
-            const isPng = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47;
-
-            if (quality >= 1) {
-                if (isJpg) return pdfDoc.embedJpg(bytes);
-                if (isPng) return pdfDoc.embedPng(bytes);
+            if (!response.ok) {
+                const errText = await response.text().catch(() => 'No text');
+                throw new Error(`Server Error: ${response.status} - ${errText}`);
             }
 
-            try {
-                const bmp = await createImageBitmap(blob);
-                const canvas = document.createElement('canvas');
-                canvas.width = bmp.width;
-                canvas.height = bmp.height;
-                const ctx = canvas.getContext('2d');
-                ctx.fillStyle = '#fff';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-                ctx.drawImage(bmp, 0, 0);
-                if (bmp.close) bmp.close();
-                const jpg = await new Promise(res => canvas.toBlob(res, 'image/jpeg', quality >= 1 ? 0.92 : quality));
-                canvas.width = canvas.height = 0; // free memory
-                if (!jpg) throw new Error('Could not re-encode a page');
-                return await pdfDoc.embedJpg(new Uint8Array(await jpg.arrayBuffer()));
-            } catch (e) {
-                // If re-encoding fails (e.g. very large page), fall back to the original bytes
-                if (isJpg) return pdfDoc.embedJpg(bytes);
-                if (isPng) return pdfDoc.embedPng(bytes);
-                throw e;
-            }
-        }
+            const data = await response.json();
 
-        async function downloadChapter(mangaTitle, chapter, btn) {
-            if (typeof PDFLib === 'undefined') {
-                showStatus('Error: the PDF library failed to load. Check your connection and reload the page.', 'error');
-                return;
-            }
-
-            btn.disabled = true;
-            btn.textContent = 'Starting...';
-            let total = 0, done = 0;
-
-            const quality = parseFloat(qualityEl.value) || 1;   // fixed for this download
-            const controller = new AbortController();
-            const signal = controller.signal;
-            const cancelBtn = btn._cancelBtn;
-            if (cancelBtn) {
-                cancelBtn.style.display = 'inline-block';
-                cancelBtn.disabled = false;
-                cancelBtn.onclick = () => {
-                    cancelBtn.disabled = true;
-                    cancelBtn.textContent = 'Cancelling...';
-                    controller.abort();
+            if (data.success && Array.isArray(data.chapters) && data.chapters.length > 0) {
+                state = {
+                    url: urlInput,
+                    title: data.title,
+                    chapters: data.chapters
                 };
+                saveState();
+                renderChapters(data.chapters, data.title);
+                showStatus(`Found ${data.chapters.length} chapters for ${data.title}`, 'success');
+            } else {
+                throw new Error(data.error || 'No chapters found or invalid response structure');
             }
 
-            try {
-                // 1. Page list: reuse the saved one when resuming, otherwise ask the Worker
-                let images = await getMeta(chapter.url);
-                if (!images || !images.length) {
-                    const res = await fetch(`${PROXY_API_URL}/images`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ url: chapter.url }),
-                        signal
-                    });
-                    const data = await res.json().catch(() => ({}));
-                    if (!res.ok || !data.success) {
-                        throw new Error(data.error || `Server Error: ${res.status}`);
-                    }
-                    images = data.images;
-                    await saveMeta(chapter.url, images);
+        } catch (error) {
+            console.error('Detailed Error:', error);
+            let msg = error.message;
+            if (msg.includes('Failed to fetch')) {
+                msg = 'Failed to fetch. Check that the Worker URL is correct and the Worker is deployed.';
+            }
+            showStatus(`Error: ${msg}`, 'error');
+        } finally {
+            btn.disabled = false;
+            loader.style.display = 'none';
+        }
+    }
+
+    function renderChapters(chapters, title) {
+        const resultsDiv = document.getElementById('results');
+        const list = document.getElementById('chapterList');
+        list.innerHTML = '';
+        buttons.clear();
+
+        document.getElementById('seriesTitle').textContent = title || 'Chapters';
+        document.getElementById('count').textContent =
+            chapters.length + (chapters.length === 1 ? ' chapter' : ' chapters');
+
+        chapters.forEach((chapter, index) => {
+            const li = document.createElement('li');
+            li.className = 'chapter-item';
+
+            const label = document.createElement('span');
+            label.textContent = `${index + 1}. ${chapter.title}`;
+
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'download-btn';
+            btn.textContent = doneMap[chapter.url] ? 'Done ✓' : 'Download';
+            btn.addEventListener('click', () => {
+                // Already downloaded? Ask before saving a second copy.
+                if (btn.textContent === 'Done ✓' &&
+                    !confirm(`${chapter.title} was already downloaded. Download it again?`)) return;
+                downloadChapter(title, chapter, btn);
+            });
+            buttons.set(chapter.url, btn);
+
+            const cancelBtn = document.createElement('button');
+            cancelBtn.type = 'button';
+            cancelBtn.className = 'download-btn cancel-btn';
+            cancelBtn.textContent = 'Cancel';
+            btn._cancelBtn = cancelBtn;
+
+            const actions = document.createElement('div');
+            actions.className = 'actions';
+            actions.appendChild(cancelBtn);
+            actions.appendChild(btn);
+
+            li.appendChild(label);
+            li.appendChild(actions);
+            list.appendChild(li);
+        });
+
+        resultsDiv.style.display = 'block';
+        markResumable();
+    }
+
+    // Show "Resume 6/14" on chapters that were partly downloaded before the browser closed
+    async function markResumable() {
+        const urls = await idb('meta', 'readonly', s => s.getAllKeys());
+        if (!urls) return;
+        for (const url of urls) {
+            const btn = buttons.get(url);
+            if (!btn || btn.disabled) continue;
+            const meta = await getMeta(url);
+            const n = await countPages(url);
+            if (meta && n > 0 && !btn.disabled) btn.textContent = `Resume ${n}/${meta.length}`;
+        }
+    }
+
+    // Turn a downloaded image blob into a pdf-lib image.
+    // quality 1 (Original): JPEG and PNG are embedded untouched; WebP/AVIF must be
+    //   converted, so they're re-encoded to JPEG at 92%.
+    // quality < 1: every page is re-encoded to JPEG at that quality (smaller file).
+    async function embedImage(pdfDoc, blob, quality) {
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        const isJpg = bytes[0] === 0xFF && bytes[1] === 0xD8;
+        const isPng = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47;
+
+        if (quality >= 1) {
+            if (isJpg) return pdfDoc.embedJpg(bytes);
+            if (isPng) return pdfDoc.embedPng(bytes);
+        }
+
+        try {
+            const bmp = await createImageBitmap(blob);
+            const canvas = document.createElement('canvas');
+            canvas.width = bmp.width;
+            canvas.height = bmp.height;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(bmp, 0, 0);
+            if (bmp.close) bmp.close();
+            const jpg = await new Promise(res => canvas.toBlob(res, 'image/jpeg', quality >= 1 ? 0.92 : quality));
+            canvas.width = canvas.height = 0; // free memory
+            if (!jpg) throw new Error('Could not re-encode a page');
+            return await pdfDoc.embedJpg(new Uint8Array(await jpg.arrayBuffer()));
+        } catch (e) {
+            // If re-encoding fails (e.g. very large page), fall back to the original bytes
+            if (isJpg) return pdfDoc.embedJpg(bytes);
+            if (isPng) return pdfDoc.embedPng(bytes);
+            throw e;
+        }
+    }
+
+    async function downloadChapter(mangaTitle, chapter, btn) {
+        if (typeof PDFLib === 'undefined') {
+            showStatus('Error: the PDF library failed to load. Check your connection and reload the page.', 'error');
+            return;
+        }
+
+        btn.disabled = true;
+        btn.textContent = 'Starting...';
+        let total = 0, done = 0;
+
+        const quality = parseFloat(qualityEl.value) || 1;   // fixed for this download
+        const controller = new AbortController();
+        const signal = controller.signal;
+        const cancelBtn = btn._cancelBtn;
+        if (cancelBtn) {
+            cancelBtn.style.display = 'inline-flex';
+            cancelBtn.disabled = false;
+            cancelBtn.onclick = () => {
+                cancelBtn.disabled = true;
+                cancelBtn.textContent = 'Cancelling...';
+                controller.abort();
+            };
+        }
+
+        try {
+            // 1. Page list: reuse the saved one when resuming, otherwise ask the Worker
+            let images = await getMeta(chapter.url);
+            if (!images || !images.length) {
+                const res = await fetch(`${PROXY_API_URL}/images`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: chapter.url }),
+                    signal
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data.success) {
+                    throw new Error(data.error || `Server Error: ${res.status}`);
                 }
-                total = images.length;
+                images = data.images;
+                await saveMeta(chapter.url, images);
+            }
+            total = images.length;
 
-                // 2. Download pages several at a time; each finished page is saved to IndexedDB,
-                //    so a closed/killed browser can pick up from the pages already stored.
-                const blobs = new Array(images.length);
-                let next = 0;
-                btn.textContent = `0/${total}`;
+            // 2. Download pages several at a time; each finished page is saved to IndexedDB,
+            //    so a closed/killed browser can pick up from the pages already stored.
+            const blobs = new Array(images.length);
+            let next = 0;
+            btn.textContent = `0/${total}`;
 
-                async function runner() {
-                    while (true) {
-                        if (signal.aborted) return;
-                        const i = next++;
-                        if (i >= images.length) return;
+            async function runner() {
+                while (true) {
+                    if (signal.aborted) return;
+                    const i = next++;
+                    if (i >= images.length) return;
 
-                        const cached = await getPage(chapter.url, i);
-                        if (cached) {
-                            blobs[i] = cached;
-                        } else {
-                            const r = await fetch(`${PROXY_API_URL}/img?u=${encodeURIComponent(images[i])}`, { signal });
-                            if (!r.ok) throw new Error(`Page ${i + 1} failed (status ${r.status})`);
-                            blobs[i] = await r.blob();
-                            await savePage(chapter.url, i, blobs[i]);
-                        }
-                        done++;
-                        btn.textContent = `${done}/${total}`;
+                    const cached = await getPage(chapter.url, i);
+                    if (cached) {
+                        blobs[i] = cached;
+                    } else {
+                        const r = await fetch(`${PROXY_API_URL}/img?u=${encodeURIComponent(images[i])}`, { signal });
+                        if (!r.ok) throw new Error(`Page ${i + 1} failed (status ${r.status})`);
+                        blobs[i] = await r.blob();
+                        await savePage(chapter.url, i, blobs[i]);
                     }
+                    done++;
+                    btn.textContent = `${done}/${total}`;
                 }
-                await Promise.all(Array.from({ length: PARALLEL_IMAGES }, runner));
+            }
+            await Promise.all(Array.from({ length: PARALLEL_IMAGES }, runner));
+            if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+
+            // 3. Build the PDF: one page per image, page size = image size
+            const pdfDoc = await PDFLib.PDFDocument.create();
+            for (let i = 0; i < blobs.length; i++) {
                 if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+                btn.textContent = `PDF ${i + 1}/${blobs.length}`;
+                const img = await embedImage(pdfDoc, blobs[i], quality);
+                blobs[i] = null; // release memory as we go
 
-                // 3. Build the PDF: one page per image, page size = image size
-                const pdfDoc = await PDFLib.PDFDocument.create();
-                for (let i = 0; i < blobs.length; i++) {
-                    if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
-                    btn.textContent = `PDF ${i + 1}/${blobs.length}`;
-                    const img = await embedImage(pdfDoc, blobs[i], quality);
-                    blobs[i] = null; // release memory as we go
+                let w = img.width, h = img.height;
+                const scale = Math.min(1, MAX_PDF_DIM / Math.max(w, h));
+                w *= scale; h *= scale;
 
-                    let w = img.width, h = img.height;
-                    const scale = Math.min(1, MAX_PDF_DIM / Math.max(w, h));
-                    w *= scale; h *= scale;
+                const page = pdfDoc.addPage([w, h]);
+                page.drawImage(img, { x: 0, y: 0, width: w, height: h });
+            }
 
-                    const page = pdfDoc.addPage([w, h]);
-                    page.drawImage(img, { x: 0, y: 0, width: w, height: h });
-                }
+            const safe = s => s.replace(/[\\/:*?"<>|]+/g, '').trim();
+            pdfDoc.setTitle(`${safe(mangaTitle)} - ${safe(chapter.title)}`);
 
-                const safe = s => s.replace(/[\\/:*?"<>|]+/g, '').trim();
-                pdfDoc.setTitle(`${safe(mangaTitle)} - ${safe(chapter.title)}`);
+            btn.textContent = 'Saving...';
+            const pdfBytes = await pdfDoc.save();
+            const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
 
-                btn.textContent = 'Saving...';
-                const pdfBytes = await pdfDoc.save();
-                const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(pdfBlob);
+            a.download = `${safe(mangaTitle)} - ${safe(chapter.title)}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(pdfBlob);
-                a.download = `${safe(mangaTitle)} - ${safe(chapter.title)}.pdf`;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+            // Finished: remember it and free the stored pages
+            doneMap[chapter.url] = true;
+            saveDone();
+            await clearChapterCache(chapter.url);
 
-                // Finished: remember it and free the stored pages
-                doneMap[chapter.url] = true;
-                saveDone();
-                await clearChapterCache(chapter.url);
+            btn.textContent = 'Done ✓';
+            showStatus(`Downloaded ${chapter.title} (${images.length} pages) as PDF`, 'success');
+        } catch (err) {
+            const cancelled = signal.aborted || err.name === 'AbortError';
+            if (!cancelled) console.error(err);
+            const stored = (await countPages(chapter.url)) || 0;
+            if (stored > 0 && total) btn.textContent = `Resume ${stored}/${total}`;
+            else if (cancelled) btn.textContent = doneMap[chapter.url] ? 'Done ✓' : 'Download';
+            else btn.textContent = 'Retry';
 
-                btn.textContent = 'Done ✓';
-                showStatus(`Downloaded ${chapter.title} (${images.length} pages) as PDF`, 'success');
-            } catch (err) {
-                const cancelled = signal.aborted || err.name === 'AbortError';
-                if (!cancelled) console.error(err);
-                const stored = (await countPages(chapter.url)) || 0;
-                if (stored > 0 && total) btn.textContent = `Resume ${stored}/${total}`;
-                else if (cancelled) btn.textContent = doneMap[chapter.url] ? 'Done ✓' : 'Download';
-                else btn.textContent = 'Retry';
-
-                if (cancelled) {
-                    showStatus(stored > 0
-                        ? `Cancelled ${chapter.title}. ${stored} pages are saved, tap Resume to continue.`
-                        : `Cancelled ${chapter.title}.`, 'success');
-                } else {
-                    showStatus(`Download failed: ${err.message}`, 'error');
-                }
-            } finally {
-                btn.disabled = false;
-                if (cancelBtn) {
-                    cancelBtn.style.display = 'none';
-                    cancelBtn.textContent = 'Cancel';
-                    cancelBtn.onclick = null;
-                }
+            if (cancelled) {
+                showStatus(stored > 0
+                    ? `Cancelled ${chapter.title}. ${stored} pages are saved, tap Resume to continue.`
+                    : `Cancelled ${chapter.title}.`, 'success');
+            } else {
+                showStatus(`Download failed: ${err.message}`, 'error');
+            }
+        } finally {
+            btn.disabled = false;
+            if (cancelBtn) {
+                cancelBtn.style.display = 'none';
+                cancelBtn.textContent = 'Cancel';
+                cancelBtn.onclick = null;
             }
         }
+    }
 
-        function showStatus(msg, type) {
-            const el = document.getElementById('status');
-            el.textContent = msg;
-            el.className = type;
-            el.style.display = 'block';
-        }
+    function showStatus(msg, type) {
+        const el = document.getElementById('status');
+        el.textContent = msg;
+        el.className = type;
+        el.style.display = 'block';
+    }
 
-        // ---------- Restore the last session on open ----------
-        loadDone();
-        loadState();
-        if (state.chapters.length) {
-            if (state.url) document.getElementById('mangaUrl').value = state.url;
-            renderChapters(state.chapters, state.title);
-            showStatus(`Restored ${state.chapters.length} chapters for ${state.title}`, 'success');
+    // ---------- Restore the last session on open ----------
+    loadDone();
+    loadState();
+    if (state.chapters.length) {
+        if (state.url) document.getElementById('mangaUrl').value = state.url;
+        renderChapters(state.chapters, state.title);
+        showStatus(`Restored ${state.chapters.length} chapters for ${state.title}`, 'success');
+    }
+
+    /* ---------- Background: drifting network ---------- */
+    (function () {
+      const c = document.getElementById("net");
+      const ctx = c.getContext("2d");
+      const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+      let w, h, dpr, nodes = [];
+      const mouse = { x: -999, y: -999 };
+
+      function resize() {
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        w = c.width = innerWidth * dpr;
+        h = c.height = innerHeight * dpr;
+        const n = Math.round(Math.min(90, (innerWidth * innerHeight) / 16000));
+        nodes = Array.from({ length: n }, () => ({
+          x: Math.random() * w, y: Math.random() * h,
+          vx: (Math.random() - .5) * .25 * dpr, vy: (Math.random() - .5) * .25 * dpr
+        }));
+      }
+      function frame() {
+        ctx.clearRect(0, 0, w, h);
+        const link = 150 * dpr;
+        for (let i = 0; i < nodes.length; i++) {
+          const a = nodes[i];
+          if (!reduce) {
+            a.x += a.vx; a.y += a.vy;
+            if (a.x < 0 || a.x > w) a.vx *= -1;
+            if (a.y < 0 || a.y > h) a.vy *= -1;
+          }
+          for (let j = i + 1; j < nodes.length; j++) {
+            const b = nodes[j], dx = a.x - b.x, dy = a.y - b.y, d = Math.hypot(dx, dy);
+            if (d < link) {
+              ctx.strokeStyle = `rgba(56,232,255,${(1 - d / link) * .22})`;
+              ctx.lineWidth = dpr * .8;
+              ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+            }
+          }
+          const md = Math.hypot(a.x - mouse.x, a.y - mouse.y);
+          if (md < 190 * dpr) {
+            ctx.strokeStyle = `rgba(138,108,255,${(1 - md / (190 * dpr)) * .5})`;
+            ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(mouse.x, mouse.y); ctx.stroke();
+          }
+          ctx.fillStyle = "rgba(56,232,255,.65)";
+          ctx.beginPath(); ctx.arc(a.x, a.y, 1.6 * dpr, 0, 6.283); ctx.fill();
         }
-    </script>
+        if (!reduce) requestAnimationFrame(frame);
+      }
+      addEventListener("resize", () => { resize(); if (reduce) frame(); });
+      addEventListener("pointermove", e => { mouse.x = e.clientX * dpr; mouse.y = e.clientY * dpr; });
+      addEventListener("pointerleave", () => { mouse.x = mouse.y = -999; });
+      resize(); frame();
+    })();
+
+    /* ---------- Title glitch: a short burst every few seconds ---------- */
+    (function () {
+      const title = document.getElementById("title");
+      if (!title || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+      let busy = false;
+      function burst() {
+        if (busy) return;
+        busy = true;
+        title.classList.add("settled");   // intro sweep is done; stop it replaying
+        title.classList.remove("glitch");
+        void title.offsetWidth;            // restart the animation
+        title.classList.add("glitch");
+        setTimeout(() => { title.classList.remove("glitch"); busy = false; }, 650);
+      }
+      function schedule() {
+        setTimeout(() => {
+          burst();
+          if (Math.random() < .35) setTimeout(burst, 750);   // occasional double hit
+          schedule();
+        }, 3500 + Math.random() * 4500);                     // every 3.5 to 8 seconds
+      }
+      setTimeout(burst, 2300);             // first hit just after the intro finishes
+      schedule();
+      title.addEventListener("pointerenter", burst);
+      title.addEventListener("pointerdown", burst);
+    })();
+</script>
 </body>
-</html>
+              </html>
+    
