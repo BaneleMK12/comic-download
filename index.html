@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MangaScraper - Download Manager</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --card-bg: #1e1e1e;
+            --text-main: #e0e0e0;
+            --accent: #00d4ff;
+            --accent-hover: #00a3cc;
+            --error: #ff4d4d;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        h1 {
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 30px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 800px;
+            background: var(--card-bg);
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid #333;
+            background: #2a2a2a;
+            color: white;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+
+        button {
+            padding: 12px 24px;
+            background: var(--accent);
+            color: #000;
+            border: none;
+            border-radius: 5px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: var(--accent-hover);
+        }
+
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+
+        #status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            display: none;
+            font-weight: bold;
+        }
+
+        .success { background: rgba(0, 212, 255, 0.1); color: var(--accent); border: 1px solid var(--accent); }
+        .error { background: rgba(255, 77, 77, 0.1); color: var(--error); border: 1px solid var(--error); }
+
+        #results {
+            margin-top: 20px;
+            display: none;
+        }
+
+        .chapter-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .chapter-item {
+            background: #2a2a2a;
+            margin-bottom: 10px;
+            padding: 15px;
+            border-radius: 5px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-left: 4px solid var(--accent);
+        }
+
+        .download-btn {
+            background: transparent;
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            padding: 8px 16px;
+            font-size: 14px;
+        }
+
+        .download-btn:hover {
+            background: var(--accent);
+            color: #000;
+        }
+
+        .loader {
+            border: 4px solid #333;
+            border-top: 4px solid var(--accent);
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            display: none;
+            margin: 0 auto;
+        }
+
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <h1>MangaScraper</h1>
+
+    <div class="container">
+        <div class="input-group">
+            <input type="text" id="mangaUrl" placeholder="Paste Manga Chapter URL (e.g., https://mangadownload.io/chapter/1)">
+            <button id="fetchBtn" onclick="fetchChapters()">Fetch</button>
+        </div>
+
+        <div id="loader" class="loader"></div>
+        <div id="status"></div>
+
+        <div id="results">
+            <h3>Available Chapters</h3>
+            <ul id="chapterList" class="chapter-list"></ul>
+        </div>
+    </div>
+
+    <script>
+        // CONFIGURATION: Replace this with your deployed Cloudflare Worker URL
+        const PROXY_API_URL = 'https://your-worker-url.workers.dev'; 
+
+        async function fetchChapters() {
+            const urlInput = document.getElementById('mangaUrl').value;
+            const btn = document.getElementById('fetchBtn');
+            const loader = document.getElementById('loader');
+            const statusDiv = document.getElementById('status');
+            const resultsDiv = document.getElementById('results');
+            const list = document.getElementById('chapterList');
+
+            if (!urlInput) {
+                showStatus('Please enter a valid URL.', 'error');
+                return;
+            }
+
+            // Reset UI
+            btn.disabled = true;
+            loader.style.display = 'block';
+            statusDiv.style.display = 'none';
+            resultsDiv.style.display = 'none';
+            list.innerHTML = '';
+
+            try {
+                // 1. Fetch data from the Proxy/Worker
+                const response = await fetch(`${PROXY_API_URL}/scrape`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: urlInput })
+                });
+
+                if (!response.ok) throw new Error(`Server Error: ${response.status}`);
+
+                const data = await response.json();
+
+                if (data.success && data.chapters.length > 0) {
+                    renderChapters(data.chapters, data.title);
+                    showStatus(`Found ${data.chapters.length} chapters for ${data.title}`, 'success');
+                } else {
+                    throw new Error('No chapters found or invalid URL');
+                }
+
+            } catch (error) {
+                console.error(error);
+                showStatus(`Error: ${error.message}. Ensure your Proxy API is running.`, 'error');
+            } finally {
+                btn.disabled = false;
+                loader.style.display = 'none';
+            }
+        }
+
+        function renderChapters(chapters, title) {
+            const resultsDiv = document.getElementById('results');
+            const list = document.getElementById('chapterList');
+            
+            chapters.forEach((chapter, index) => {
+                const li = document.createElement('li');
+                li.className = 'chapter-item';
+                li.innerHTML = `
+                    <span>${index + 1}. ${chapter.title}</span>
+                    <button class="download-btn" onclick="downloadChapter('${title}', ${index})">Download</button>
+                `;
+                list.appendChild(li);
+            });
+
+            resultsDiv.style.display = 'block';
+        }
+
+        async function downloadChapter(mangaTitle, chapterIndex) {
+            alert(`Initiating download for Chapter ${chapterIndex + 1} of ${mangaTitle}...\n(This would trigger the backend download logic)`);
+            // In a real scenario, this would call a /download endpoint on your worker
+        }
+
+        function showStatus(msg, type) {
+            const el = document.getElementById('status');
+            el.textContent = msg;
+            el.className = type;
+            el.style.display = 'block';
+        }
+    </script>
+</body>
+  </html>
+      
