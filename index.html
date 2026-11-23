@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MangaScraper - Download Manager</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
     <style>
         :root {
             --bg-color: #121212;
@@ -151,7 +151,8 @@
     <script>
         // CONFIGURATION: must match your deployed Worker URL exactly
         const PROXY_API_URL = 'https://comic-download.makhanyabanele12.workers.dev';
-        const PARALLEL_IMAGES = 4;
+        const PARALLEL_IMAGES = 8;       // images downloaded at once
+        const MAX_PDF_DIM = 14400;       // PDF page size limit (points)
 
         document.getElementById('fetchBtn').addEventListener('click', fetchChapters);
 
@@ -232,9 +233,34 @@
             resultsDiv.style.display = 'block';
         }
 
+        // Turn a downloaded image blob into a pdf-lib image.
+        // JPEG and PNG are embedded as-is (fast); WebP/AVIF are re-encoded to JPEG first.
+        async function embedImage(pdfDoc, blob) {
+            const bytes = new Uint8Array(await blob.arrayBuffer());
+            const isJpg = bytes[0] === 0xFF && bytes[1] === 0xD8;
+            const isPng = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47;
+
+            if (isJpg) return pdfDoc.embedJpg(bytes);
+            if (isPng) return pdfDoc.embedPng(bytes);
+
+            const bmp = await createImageBitmap(blob);
+            const canvas = document.createElement('canvas');
+            canvas.width = bmp.width;
+            canvas.height = bmp.height;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(bmp, 0, 0);
+            if (bmp.close) bmp.close();
+            const jpg = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.92));
+            if (!jpg) throw new Error('Could not convert a WebP page to JPEG');
+            canvas.width = canvas.height = 0; // free memory
+            return pdfDoc.embedJpg(new Uint8Array(await jpg.arrayBuffer()));
+        }
+
         async function downloadChapter(mangaTitle, chapter, btn) {
-            if (typeof JSZip === 'undefined') {
-                showStatus('Error: the ZIP library failed to load. Check your connection and reload the page.', 'error');
+            if (typeof PDFLib === 'undefined') {
+                showStatus('Error: the PDF library failed to load. Check your connection and reload the page.', 'error');
                 return;
             }
 
@@ -254,7 +280,7 @@
                 }
                 const images = data.images;
 
-                // 2. Download the images (a few at a time) through the Worker
+                // 2. Download the images (several at a time) through the Worker
                 const blobs = new Array(images.length);
                 let next = 0, done = 0;
                 btn.textContent = `0/${images.length}`;
@@ -272,26 +298,38 @@
                 }
                 await Promise.all(Array.from({ length: PARALLEL_IMAGES }, runner));
 
-                // 3. Pack into a ZIP and save it
-                btn.textContent = 'Zipping...';
-                const zip = new JSZip();
-                blobs.forEach((blob, i) => {
-                    const ext = (images[i].match(/\.(jpe?g|png|webp|avif)(?:\?|$)/i) || [, 'jpg'])[1].toLowerCase();
-                    zip.file(String(i + 1).padStart(3, '0') + '.' + ext, blob);
-                });
-                const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
+                // 3. Build the PDF: one page per image, page size = image size
+                const pdfDoc = await PDFLib.PDFDocument.create();
+                for (let i = 0; i < blobs.length; i++) {
+                    btn.textContent = `PDF ${i + 1}/${blobs.length}`;
+                    const img = await embedImage(pdfDoc, blobs[i]);
+                    blobs[i] = null; // release memory as we go
+
+                    let w = img.width, h = img.height;
+                    const scale = Math.min(1, MAX_PDF_DIM / Math.max(w, h));
+                    w *= scale; h *= scale;
+
+                    const page = pdfDoc.addPage([w, h]);
+                    page.drawImage(img, { x: 0, y: 0, width: w, height: h });
+                }
 
                 const safe = s => s.replace(/[\\/:*?"<>|]+/g, '').trim();
+                pdfDoc.setTitle(`${safe(mangaTitle)} - ${safe(chapter.title)}`);
+
+                btn.textContent = 'Saving...';
+                const pdfBytes = await pdfDoc.save();
+                const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
+
                 const a = document.createElement('a');
-                a.href = URL.createObjectURL(zipBlob);
-                a.download = `${safe(mangaTitle)} - ${safe(chapter.title)}.zip`;
+                a.href = URL.createObjectURL(pdfBlob);
+                a.download = `${safe(mangaTitle)} - ${safe(chapter.title)}.pdf`;
                 document.body.appendChild(a);
                 a.click();
                 a.remove();
                 setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 
                 btn.textContent = 'Done ✓';
-                showStatus(`Downloaded ${chapter.title} (${images.length} pages)`, 'success');
+                showStatus(`Downloaded ${chapter.title} (${images.length} pages) as PDF`, 'success');
             } catch (err) {
                 console.error(err);
                 btn.textContent = 'Retry';
