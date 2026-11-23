@@ -11,8 +11,7 @@ const json = (obj, status = 200) =>
     headers: { ...corsHeaders, 'Content-Type': 'application/json' }
   });
 
-function parsePage(html, targetUrl) {
-  // Unescape slashes in JSON-embedded pages
+function parsePage(html, seriesUrl) {
   html = html.replace(/\\u002F|\\\//g, '/');
 
   const t =
@@ -22,11 +21,11 @@ function parsePage(html, targetUrl) {
     .replace(/&#x27;|&#39;/g, "'").replace(/&amp;/g, '&')
     .split(/\s[-|–]\s/)[0].replace(/\s*chapter\s*\d+.*$/i, '').trim();
 
-  const prefix = targetUrl.split(/\/chapter/i)[0];
+  const prefix = seriesUrl.replace(/\/$/, '');
   const seen = new Map();
   for (const m of html.matchAll(/href=["']([^"']*chapter[^"']*)["']/gi)) {
     let abs;
-    try { abs = new URL(m[1], targetUrl).href; } catch { continue; }
+    try { abs = new URL(m[1], seriesUrl).href; } catch { continue; }
     const n = abs.match(/chapter[\/-]?(\d+(?:[.-]\d+)?)/i);
     if (!n) continue;
     const num = parseFloat(n[1].replace('-', '.'));
@@ -36,6 +35,19 @@ function parsePage(html, targetUrl) {
   let chapters = [...seen.entries()].map(([num, url]) => ({ num, url }));
   const sameSeries = chapters.filter(c => c.url.startsWith(prefix));
   if (sameSeries.length) chapters = sameSeries;
+
+  // Many sites only put the newest chapters in the HTML.
+  // If the links follow /chapter-N, fill in the full 1..total range.
+  const declared = html.match(/Chapters\s*\(\s*(\d+)\s*\)/i);
+  const maxFound = chapters.length ? Math.max(...chapters.map(c => c.num)) : 0;
+  const total = Math.max(maxFound, declared ? parseInt(declared[1], 10) : 0);
+  const followsPattern = chapters.every(c => c.url === `${prefix}/chapter-${c.num}`);
+  if (followsPattern && total > 0 && total <= 3000) {
+    chapters = Array.from({ length: total }, (_, i) => ({
+      num: i + 1,
+      url: `${prefix}/chapter-${i + 1}`
+    }));
+  }
 
   chapters.sort((a, b) => a.num - b.num);
   return {
@@ -60,15 +72,18 @@ export default {
       const targetUrl = body.url;
       if (!targetUrl) return json({ error: 'Missing URL' }, 400);
 
+      // Always read the series page, even if a chapter link was pasted
+      const seriesUrl = targetUrl.split(/\/chapter/i)[0];
+
       try {
-        const res = await fetch(targetUrl, {
+        const res = await fetch(seriesUrl, {
           headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36' }
         });
         if (!res.ok) throw new Error(`Target site returned status: ${res.status}`);
 
-        const { title, chapters } = parsePage(await res.text(), targetUrl);
+        const { title, chapters } = parsePage(await res.text(), seriesUrl);
         if (!chapters.length) {
-          return json({ error: 'No chapter links found in the page HTML (the site may load them with JavaScript).' }, 404);
+          return json({ error: 'No chapter links found in the page HTML.' }, 404);
         }
         return json({ success: true, title, chapters });
       } catch (e) {
