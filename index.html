@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MangaScraper - Download Manager</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <style>
         :root {
             --bg-color: #121212;
@@ -71,14 +72,8 @@
             transition: background 0.2s;
         }
 
-        button:hover {
-            background: var(--accent-hover);
-        }
-
-        button:disabled {
-            background: #555;
-            cursor: not-allowed;
-        }
+        button:hover { background: var(--accent-hover); }
+        button:disabled { background: #555; cursor: not-allowed; }
 
         #status {
             margin-top: 20px;
@@ -92,15 +87,9 @@
         .success { background: rgba(0, 212, 255, 0.1); color: var(--accent); border: 1px solid var(--accent); }
         .error { background: rgba(255, 77, 77, 0.1); color: var(--error); border: 1px solid var(--error); }
 
-        #results {
-            margin-top: 20px;
-            display: none;
-        }
+        #results { margin-top: 20px; display: none; }
 
-        .chapter-list {
-            list-style: none;
-            padding: 0;
-        }
+        .chapter-list { list-style: none; padding: 0; }
 
         .chapter-item {
             background: #2a2a2a;
@@ -120,12 +109,11 @@
             color: var(--accent);
             padding: 8px 16px;
             font-size: 14px;
+            min-width: 110px;
         }
 
-        .download-btn:hover {
-            background: var(--accent);
-            color: #000;
-        }
+        .download-btn:hover { background: var(--accent); color: #000; }
+        .download-btn:disabled { background: transparent; color: #888; border-color: #555; }
 
         .loader {
             border: 4px solid #333;
@@ -147,7 +135,7 @@
 
     <div class="container">
         <div class="input-group">
-            <input type="text" id="mangaUrl" placeholder="Paste Manga Chapter URL (e.g., https://asurascans.com/...)" value="https://asurascans.com/comics/reincarnators-stream-7de80a82/chapter/1">
+            <input type="text" id="mangaUrl" placeholder="Paste Manga Series or Chapter URL" value="https://vortexscans.org/series/became-the-patron-of-villains">
             <button id="fetchBtn">Fetch</button>
         </div>
 
@@ -163,6 +151,7 @@
     <script>
         // CONFIGURATION: must match your deployed Worker URL exactly
         const PROXY_API_URL = 'https://comic-download.makhanyabanele12.workers.dev';
+        const PARALLEL_IMAGES = 4;
 
         document.getElementById('fetchBtn').addEventListener('click', fetchChapters);
 
@@ -179,7 +168,6 @@
                 return;
             }
 
-            // Reset UI
             btn.disabled = true;
             loader.style.display = 'block';
             statusDiv.style.display = 'none';
@@ -234,7 +222,7 @@
                 const btn = document.createElement('button');
                 btn.className = 'download-btn';
                 btn.textContent = 'Download';
-                btn.addEventListener('click', () => downloadChapter(title, index));
+                btn.addEventListener('click', () => downloadChapter(title, chapter, btn));
 
                 li.appendChild(label);
                 li.appendChild(btn);
@@ -244,8 +232,73 @@
             resultsDiv.style.display = 'block';
         }
 
-        async function downloadChapter(mangaTitle, chapterIndex) {
-            alert(`Initiating download for Chapter ${chapterIndex + 1} of ${mangaTitle}...\n(This is a frontend simulation)`);
+        async function downloadChapter(mangaTitle, chapter, btn) {
+            if (typeof JSZip === 'undefined') {
+                showStatus('Error: the ZIP library failed to load. Check your connection and reload the page.', 'error');
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Starting...';
+
+            try {
+                // 1. Ask the Worker for this chapter's page images
+                const res = await fetch(`${PROXY_API_URL}/images`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: chapter.url })
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data.success) {
+                    throw new Error(data.error || `Server Error: ${res.status}`);
+                }
+                const images = data.images;
+
+                // 2. Download the images (a few at a time) through the Worker
+                const blobs = new Array(images.length);
+                let next = 0, done = 0;
+                btn.textContent = `0/${images.length}`;
+
+                async function runner() {
+                    while (true) {
+                        const i = next++;
+                        if (i >= images.length) return;
+                        const r = await fetch(`${PROXY_API_URL}/img?u=${encodeURIComponent(images[i])}`);
+                        if (!r.ok) throw new Error(`Page ${i + 1} failed (status ${r.status})`);
+                        blobs[i] = await r.blob();
+                        done++;
+                        btn.textContent = `${done}/${images.length}`;
+                    }
+                }
+                await Promise.all(Array.from({ length: PARALLEL_IMAGES }, runner));
+
+                // 3. Pack into a ZIP and save it
+                btn.textContent = 'Zipping...';
+                const zip = new JSZip();
+                blobs.forEach((blob, i) => {
+                    const ext = (images[i].match(/\.(jpe?g|png|webp|avif)(?:\?|$)/i) || [, 'jpg'])[1].toLowerCase();
+                    zip.file(String(i + 1).padStart(3, '0') + '.' + ext, blob);
+                });
+                const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
+
+                const safe = s => s.replace(/[\\/:*?"<>|]+/g, '').trim();
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(zipBlob);
+                a.download = `${safe(mangaTitle)} - ${safe(chapter.title)}.zip`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+
+                btn.textContent = 'Done ✓';
+                showStatus(`Downloaded ${chapter.title} (${images.length} pages)`, 'success');
+            } catch (err) {
+                console.error(err);
+                btn.textContent = 'Retry';
+                showStatus(`Download failed: ${err.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+            }
         }
 
         function showStatus(msg, type) {
