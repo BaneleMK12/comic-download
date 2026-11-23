@@ -36,17 +36,24 @@ function parsePage(html, seriesUrl) {
   const sameSeries = chapters.filter(c => c.url.startsWith(prefix));
   if (sameSeries.length) chapters = sameSeries;
 
-  // Many sites only put the newest chapters in the HTML.
-  // If the links follow /chapter-N, fill in the full 1..total range.
-  const declared = html.match(/Chapters\s*\(\s*(\d+)\s*\)/i);
+  // Fill gaps: copy the URL format of a real link and fill missing numbers
+  const text = html.replace(/<[^>]+>/g, ' ');
+  const declared = text.match(/Chapters\s*\(\s*(\d+)\s*\)/i);
   const maxFound = chapters.length ? Math.max(...chapters.map(c => c.num)) : 0;
   const total = Math.max(maxFound, declared ? parseInt(declared[1], 10) : 0);
-  const followsPattern = chapters.every(c => c.url === `${prefix}/chapter-${c.num}`);
-  if (followsPattern && total > 0 && total <= 3000) {
-    chapters = Array.from({ length: total }, (_, i) => ({
-      num: i + 1,
-      url: `${prefix}/chapter-${i + 1}`
-    }));
+
+  const sample = chapters.find(c => Number.isInteger(c.num));
+  if (sample && total > 0 && total <= 3000) {
+    const tpl = sample.url.replace(
+      new RegExp(`(chapter[\\/-]?)${sample.num}(?!\\d)`, 'i'),
+      '$1{N}'
+    );
+    if (tpl.includes('{N}')) {
+      const have = new Set(chapters.map(c => c.num));
+      for (let n = 1; n <= total; n++) {
+        if (!have.has(n)) chapters.push({ num: n, url: tpl.replace('{N}', n) });
+      }
+    }
   }
 
   chapters.sort((a, b) => a.num - b.num);
@@ -72,7 +79,6 @@ export default {
       const targetUrl = body.url;
       if (!targetUrl) return json({ error: 'Missing URL' }, 400);
 
-      // Always read the series page, even if a chapter link was pasted
       const seriesUrl = targetUrl.split(/\/chapter/i)[0];
 
       try {
