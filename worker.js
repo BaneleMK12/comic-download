@@ -7,21 +7,43 @@ const corsHeaders = {
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
 
+// Supported sites. A URL is allowed if its host is one of these or a subdomain of one
+// (e.g. storage.vortexscans.org). To support another site, add its domain here.
+const ALLOWED_SITES = ['vortexscans.org', 'asurascans.com', 'asuracomic.net'];
+
 const json = (obj, status = 200) =>
   new Response(JSON.stringify(obj), {
     status,
     headers: { ...corsHeaders, 'Content-Type': 'application/json' }
   });
 
-// Only allow requests to vortexscans.org and its subdomains (keeps this from being an open proxy)
-function isAllowedHost(u) {
+function siteOf(u) {
   try {
     const h = new URL(u).hostname;
-    return h === 'vortexscans.org' || h.endsWith('.vortexscans.org');
+    return ALLOWED_SITES.find(d => h === d || h.endsWith('.' + d)) || null;
   } catch {
-    return false;
+    return null;
   }
 }
+
+const isAllowedHost = u => !!siteOf(u);
+
+// "asurascans.com/comics/..." (no https://) -> "https://asurascans.com/comics/..."
+function normalizeUrl(u) {
+  u = String(u || '').trim();
+  if (!u) return '';
+  return /^https?:\/\//i.test(u) ? u : 'https://' + u.replace(/^\/+/, '');
+}
+
+// Image hosts often check the Referer, so send the main site's address
+const refererFor = u => (siteOf(u) ? `https://${siteOf(u)}/` : 'https://vortexscans.org/');
+
+const pageHeaders = referer => ({
+  'User-Agent': UA,
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Referer': referer
+});
 
 function parsePage(html, seriesUrl) {
   html = html.replace(/\\u002F|\\\//g, '/');
@@ -42,6 +64,22 @@ function parsePage(html, seriesUrl) {
     if (!n) continue;
     const num = parseFloat(n[1].replace('-', '.'));
     if (!seen.has(num)) seen.set(num, abs);
+  }
+
+  // Fallback for sites that keep chapter links in embedded JSON instead of <a href>:
+  // look for "<series path>/chapter/<n>" anywhere in the page.
+  if (!seen.size) {
+    try {
+      const path = new URL(seriesUrl).pathname.replace(/\/$/, '');
+      const re = new RegExp(
+        path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/chapter[\\/-]?(\\d+(?:[.-]\\d+)?)',
+        'gi'
+      );
+      for (const m of html.matchAll(re)) {
+        const num = parseFloat(m[1].replace('-', '.'));
+        if (!seen.has(num)) seen.set(num, new URL(m[0], seriesUrl).href);
+      }
+    } catch { /* ignore */ }
   }
 
   let chapters = [...seen.entries()].map(([num, url]) => ({ num, url }));
@@ -75,27 +113,39 @@ function parsePage(html, seriesUrl) {
   };
 }
 
-// Pull the page images out of a chapter page.
-// Pages look like: https://storage.vortexscans.org//upload/series/<slug>/<id>/01.jpg
-function parseImages(html) {
+// Pull the page images out of a chapter page (works for plain <img> tags, lazy-load
+// attributes and image URLs inside embedded JSON). The chapter's pages share one folder,
+// so we keep the folder with the most images and drop covers, logos, thumbnails, etc.
+function parseImages(html, pageUrl) {
   html = html
     .replace(/\\u002F|\\\//g, '/')
     .replace(/&amp;/g, '&');
 
-  const re = /https?:\/\/[^\s"'<>)\\]+\/upload\/series\/[^\s"'<>)\\]+?\.(?:jpe?g|png|webp|avif)(?=["'<>)\s\\?]|$)/gi;
+  const IMG_EXT = /\.(?:jpe?g|png|webp|avif)(?:$|\?)/i;
+  const SKIP = /featured|cover|thumb|logo|avatar|icon|banner|sprite|favicon|emoji|placeholder|loading|\/ads?\//i;
+
+  // Collect candidates in page order
+  const candidates = [];
+  const attr = /(?:src|data-src|data-lazy-src|data-original)\s*=\s*["']([^"']+)["']/gi;
+  const abs = /(?:https?:)?\/\/[^\s"'<>)\\]+?\.(?:jpe?g|png|webp|avif)(?:\?[^\s"'<>)\\]*)?/gi;
+  for (const re of [attr, abs]) {
+    for (const m of html.matchAll(re)) {
+      candidates.push({ raw: m[1] || m[0], at: m.index });
+    }
+  }
+  candidates.sort((a, b) => a.at - b.at);
+
   const found = [];
   const seen = new Set();
-  for (const m of html.matchAll(re)) {
-    const u = m[0];
-    if (/\/featured\//i.test(u)) continue; // series cover / thumbnails
-    if (seen.has(u)) continue;
+  for (const c of candidates) {
+    let u;
+    try { u = new URL(c.raw.trim(), pageUrl).href; } catch { continue; }
+    if (!/^https?:/i.test(u) || !IMG_EXT.test(u) || SKIP.test(u) || seen.has(u)) continue;
     seen.add(u);
     found.push(u);
   }
 
-  // The chapter's pages share one folder; keep only the most common folder
-  // so stray images (recommendations etc.) are dropped.
-  const folderOf = u => u.slice(0, u.lastIndexOf('/'));
+  const folderOf = u => u.split('?')[0].replace(/\/[^\/]*$/, '');
   const counts = new Map();
   for (const u of found) counts.set(folderOf(u), (counts.get(folderOf(u)) || 0) + 1);
   let best = '', bestN = 0;
@@ -103,9 +153,13 @@ function parseImages(html) {
 
   const pages = found.filter(u => folderOf(u) === best);
 
-  // Sort by the page number in the filename (01.jpg, 02.jpg, ...)
-  const num = u => parseInt((u.match(/(\d+)\.[a-z0-9]+$/i) || [, '0'])[1], 10);
-  pages.sort((a, b) => num(a) - num(b));
+  // Sort by page number in the filename (01.jpg, 002.webp, ...) when every page has one;
+  // otherwise keep the order they appear in the page.
+  const numOf = u => {
+    const m = u.split('?')[0].match(/(\d+)\.[a-z0-9]+$/i);
+    return m ? parseInt(m[1], 10) : null;
+  };
+  if (pages.every(u => numOf(u) !== null)) pages.sort((a, b) => numOf(a) - numOf(b));
   return pages;
 }
 
@@ -123,13 +177,16 @@ export default {
       try { body = await request.json(); }
       catch { return json({ error: 'Invalid JSON' }, 400); }
 
-      const targetUrl = body.url;
+      const targetUrl = normalizeUrl(body.url);
       if (!targetUrl) return json({ error: 'Missing URL' }, 400);
+      if (!isAllowedHost(targetUrl)) {
+        return json({ error: `Unsupported site. Supported: ${ALLOWED_SITES.join(', ')}` }, 400);
+      }
 
       const seriesUrl = targetUrl.split(/\/chapter/i)[0];
 
       try {
-        const res = await fetch(seriesUrl, { headers: { 'User-Agent': UA } });
+        const res = await fetch(seriesUrl, { headers: pageHeaders(refererFor(seriesUrl)) });
         if (!res.ok) throw new Error(`Target site returned status: ${res.status}`);
 
         const { title, chapters } = parsePage(await res.text(), seriesUrl);
@@ -148,19 +205,22 @@ export default {
       try { body = await request.json(); }
       catch { return json({ error: 'Invalid JSON' }, 400); }
 
-      const chapterUrl = body.url;
+      const chapterUrl = normalizeUrl(body.url);
       if (!chapterUrl) return json({ error: 'Missing URL' }, 400);
       if (!isAllowedHost(chapterUrl)) return json({ error: 'URL not allowed' }, 400);
 
       try {
-        const res = await fetch(chapterUrl, {
-          headers: { 'User-Agent': UA, 'Referer': 'https://vortexscans.org/' }
-        });
+        const res = await fetch(chapterUrl, { headers: pageHeaders(refererFor(chapterUrl)) });
         if (!res.ok) throw new Error(`Chapter page returned status: ${res.status}`);
 
-        const images = parseImages(await res.text());
+        const images = parseImages(await res.text(), chapterUrl);
         if (!images.length) {
           return json({ error: 'No page images found (chapter may be locked or not released).' }, 404);
+        }
+        // Make sure /img will accept every image host we're about to hand out
+        const blocked = images.find(u => !isAllowedHost(u));
+        if (blocked) {
+          return json({ error: `Images are hosted on a domain that isn't allowed yet: ${new URL(blocked).hostname}` }, 502);
         }
         return json({ success: true, images });
       } catch (e) {
@@ -178,7 +238,7 @@ export default {
         const res = await fetch(target, {
           headers: {
             'User-Agent': UA,
-            'Referer': 'https://vortexscans.org/',
+            'Referer': refererFor(target),
             'Accept': 'image/avif,image/webp,image/*,*/*;q=0.8'
           }
         });
@@ -200,4 +260,3 @@ export default {
     return new Response('Worker is running', { status: 200, headers: corsHeaders });
   }
 };
-  
