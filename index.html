@@ -170,8 +170,20 @@
         // ---------- Saved state (survives closing / killing the browser) ----------
         // localStorage: the chapter list + which chapters are finished.
         // IndexedDB: page images of chapters that are partly downloaded (for Resume).
-        let state = { url: '', title: '', chapters: [], done: {} };
+        let state = { url: '', title: '', chapters: [] };
         const buttons = new Map(); // chapter url -> button
+
+        // Finished chapters, remembered for EVERY series you've used (chapter URLs are unique)
+        const DONE_KEY = 'ms_done_v1';
+        let doneMap = {};
+
+        function saveDone() {
+            try { localStorage.setItem(DONE_KEY, JSON.stringify(doneMap)); } catch (e) {}
+        }
+
+        function loadDone() {
+            try { doneMap = JSON.parse(localStorage.getItem(DONE_KEY) || '{}') || {}; } catch (e) { doneMap = {}; }
+        }
 
         function saveState() {
             try { localStorage.setItem(STATE_KEY, JSON.stringify(state)); } catch (e) {}
@@ -180,7 +192,15 @@
         function loadState() {
             try {
                 const s = JSON.parse(localStorage.getItem(STATE_KEY) || 'null');
-                if (s && Array.isArray(s.chapters)) state = Object.assign(state, s, { done: s.done || {} });
+                if (s && Array.isArray(s.chapters)) {
+                    state = { url: s.url || '', title: s.title || '', chapters: s.chapters };
+                    // Carry over Done marks saved by the previous version
+                    if (s.done && Object.keys(s.done).length) {
+                        Object.assign(doneMap, s.done);
+                        saveDone();
+                        saveState();
+                    }
+                }
             } catch (e) {}
         }
 
@@ -231,10 +251,11 @@
         document.getElementById('fetchBtn').addEventListener('click', fetchChapters);
 
         document.getElementById('clearBtn').addEventListener('click', async () => {
-            if (!confirm('Clear the saved chapter list and any partly downloaded pages?')) return;
-            try { localStorage.removeItem(STATE_KEY); } catch (e) {}
+            if (!confirm('Clear the saved chapter list, download history (Done marks) and any partly downloaded pages?')) return;
+            try { localStorage.removeItem(STATE_KEY); localStorage.removeItem(DONE_KEY); } catch (e) {}
             await clearAllCache();
-            state = { url: '', title: '', chapters: [], done: {} };
+            doneMap = {};
+            state = { url: '', title: '', chapters: [] };
             buttons.clear();
             document.getElementById('chapterList').innerHTML = '';
             document.getElementById('results').style.display = 'none';
@@ -275,13 +296,10 @@
                 const data = await response.json();
 
                 if (data.success && Array.isArray(data.chapters) && data.chapters.length > 0) {
-                    // Keep "done" marks only when re-fetching the same series
-                    const sameSeries = state.title === data.title;
                     state = {
                         url: urlInput,
                         title: data.title,
-                        chapters: data.chapters,
-                        done: sameSeries ? state.done : {}
+                        chapters: data.chapters
                     };
                     saveState();
                     renderChapters(data.chapters, data.title);
@@ -318,8 +336,13 @@
 
                 const btn = document.createElement('button');
                 btn.className = 'download-btn';
-                btn.textContent = state.done[chapter.url] ? 'Done ✓' : 'Download';
-                btn.addEventListener('click', () => downloadChapter(title, chapter, btn));
+                btn.textContent = doneMap[chapter.url] ? 'Done ✓' : 'Download';
+                btn.addEventListener('click', () => {
+                    // Already downloaded? Ask before saving a second copy.
+                    if (btn.textContent === 'Done ✓' &&
+                        !confirm(`${chapter.title} was already downloaded. Download it again?`)) return;
+                    downloadChapter(title, chapter, btn);
+                });
                 buttons.set(chapter.url, btn);
 
                 li.appendChild(label);
@@ -454,8 +477,8 @@
                 setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 
                 // Finished: remember it and free the stored pages
-                state.done[chapter.url] = true;
-                saveState();
+                doneMap[chapter.url] = true;
+                saveDone();
                 await clearChapterCache(chapter.url);
 
                 btn.textContent = 'Done ✓';
@@ -478,6 +501,7 @@
         }
 
         // ---------- Restore the last session on open ----------
+        loadDone();
         loadState();
         if (state.chapters.length) {
             if (state.url) document.getElementById('mangaUrl').value = state.url;
