@@ -40,20 +40,6 @@
   a { color: inherit; }
   :focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
 
-  /* ---------- Background artwork ---------- */
-  .bg {
-    position: fixed; inset: 0; z-index: 0; pointer-events: none;
-    background: var(--bg) url("https://i.ibb.co/M5B4Pxy0/file-0000000033608243a9457973cb00acf2.png") center / cover no-repeat;
-  }
-  @media (orientation: portrait) {
-    .bg { background-image: url("https://i.ibb.co/DHsD7SC8/file-0000000033608243a9457973cb00acf2.jpg"); }
-  }
-  /* darkens the artwork so text and cards stay readable */
-  .bg::after {
-    content: ""; position: absolute; inset: 0;
-    background: linear-gradient(180deg, rgba(5,8,16,.55), rgba(5,8,16,.70) 60%, rgba(5,8,16,.88));
-  }
-
   /* ---------- Background network canvas ---------- */
   #net {
     position: fixed; inset: 0; width: 100%; height: 100%;
@@ -62,8 +48,11 @@
   .veil {
     position: fixed; inset: 0; z-index: 0; pointer-events: none;
     background:
-      radial-gradient(ellipse at 50% 0%, rgba(56,232,255,.10), transparent 60%),
-      radial-gradient(ellipse at 100% 100%, rgba(138,108,255,.10), transparent 55%);
+      radial-gradient(ellipse at 50% -10%, rgba(56,232,255,.16), transparent 55%),
+      radial-gradient(ellipse at 100% 100%, rgba(138,108,255,.16), transparent 55%),
+      radial-gradient(ellipse at 0% 70%, rgba(255,61,139,.06), transparent 50%),
+      linear-gradient(rgba(56,232,255,.035) 1px, transparent 1px) 0 0 / 44px 44px,
+      linear-gradient(90deg, rgba(56,232,255,.035) 1px, transparent 1px) 0 0 / 44px 44px;
   }
   main, footer { position: relative; z-index: 1; }
 
@@ -241,34 +230,110 @@
   .filter:hover { color: var(--text); border-color: #2c4670; }
 
   .chapter-list {
-    list-style: none; display: grid; gap: 12px;
+    list-style: none; display: grid; gap: 14px;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
   }
   .chapter-item {
-    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
-    gap: 10px 12px; padding: 12px 14px;
-    background: linear-gradient(180deg, var(--panel-2), var(--panel));
-    border: 1px solid var(--line); border-left: 3px solid var(--cyan); border-radius: 3px;
-    transition: border-color .25s, box-shadow .25s;
+    --p: 0%;
+    position: relative; overflow: hidden;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 14px 14px 14px 20px;
+    background:
+      linear-gradient(135deg, rgba(56,232,255,.08), transparent 45%),
+      linear-gradient(180deg, var(--panel-2), var(--panel));
+    border: 1px solid var(--line); border-radius: 4px;
+    transition: transform .3s cubic-bezier(.2,.7,.2,1), border-color .3s, box-shadow .3s;
   }
-  .chapter-item:hover { border-color: #2c4670; border-left-color: var(--cyan); box-shadow: 0 10px 30px -18px rgba(56,232,255,.4); }
-  .chapter-item > span { flex: 1 1 120px; min-width: 0; font-weight: 400; }
+  /* glowing accent bar on the left */
+  .chapter-item::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+    background: linear-gradient(180deg, var(--cyan), var(--violet));
+    box-shadow: 0 0 14px var(--cyan);
+  }
+  /* progress bar along the bottom (only while downloading) */
+  .chapter-item::after {
+    content: ""; position: absolute; left: 0; bottom: 0; height: 3px; width: var(--p);
+    background: linear-gradient(90deg, var(--cyan), var(--violet));
+    box-shadow: 0 0 10px var(--cyan);
+    opacity: 0; transition: width .3s ease, opacity .3s;
+  }
+  .chapter-item[data-state="busy"]::after { opacity: 1; }
+  .chapter-item:hover { transform: translateY(-2px); border-color: #2c4670; box-shadow: 0 14px 34px -18px rgba(56,232,255,.5); }
+
+  .chapter-item[data-state="done"] {
+    background:
+      linear-gradient(135deg, rgba(138,108,255,.14), transparent 50%),
+      linear-gradient(180deg, var(--panel-2), var(--panel));
+  }
+  .chapter-item[data-state="done"]::before   { background: linear-gradient(180deg, var(--violet), #b58bff); box-shadow: 0 0 14px var(--violet); }
+  .chapter-item[data-state="resume"]::before { background: linear-gradient(180deg, #ffb84d, var(--pink)); box-shadow: 0 0 14px var(--pink); }
+  .chapter-item[data-state="retry"]::before  { background: var(--pink); box-shadow: 0 0 14px var(--pink); }
+
+  .chapter-item .info { min-width: 0; flex: 1 1 auto; }
+  .chapter-item .name {
+    display: block; font-family: var(--head); font-weight: 600;
+    font-size: 1.1rem; letter-spacing: .02em; line-height: 1.25;
+  }
+  .chapter-item .sub { display: block; margin-top: 2px; font-size: .74rem; color: var(--muted); }
+  .chapter-item[data-state="done"] .sub   { color: #b9a8ff; }
+  .chapter-item[data-state="busy"] .sub   { color: var(--cyan); }
+  .chapter-item[data-state="resume"] .sub { color: #ffb36b; }
+  .chapter-item[data-state="retry"] .sub  { color: #ff7fb0; }
+
   .actions { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
 
+  /* Main action button: filled, clipped corners, icon on the left */
   .download-btn {
-    min-height: 44px; min-width: 120px; padding: 0 16px;
-    font-family: var(--head); font-weight: 700; font-size: .92rem; letter-spacing: .04em;
-    color: var(--cyan); background: transparent;
-    border: 1px solid var(--cyan); border-radius: 2px; cursor: pointer;
+    --ico: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='square'%3E%3Cpath d='M12 4v12M6 11l6 6 6-6M5 20h14'/%3E%3C/svg%3E");
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    min-height: 44px; min-width: 112px; padding: 0 16px;
+    font-family: var(--head); font-weight: 700; font-size: .92rem; letter-spacing: .04em; white-space: nowrap;
+    color: #031018; border: 0; cursor: pointer;
+    background: linear-gradient(100deg, var(--cyan), #7fb4ff);
+    clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
+    transition: filter .25s, transform .15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .download-btn::before {
+    content: ""; width: 15px; height: 15px; flex: none; background: currentColor;
+    -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat;
+  }
+  .download-btn:hover { filter: brightness(1.12) saturate(1.15); }
+  .download-btn:active { transform: scale(.97); }
+  .download-btn:disabled { cursor: default; filter: none; transform: none; }
+
+  /* Done: violet with a check */
+  .download-btn[data-state="done"] {
+    --ico: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3.5' stroke-linecap='square'%3E%3Cpath d='M4 12.5l5.5 5.5L20 6.5'/%3E%3C/svg%3E");
+    color: #fff; background: linear-gradient(100deg, #7a5cff, #b58bff);
+  }
+  /* Resume: warm orange to pink with a play arrow */
+  .download-btn[data-state="resume"] {
+    --ico: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'%3E%3Cpath d='M6 3.5l14 8.5-14 8.5z'/%3E%3C/svg%3E");
+    color: #1a0510; background: linear-gradient(100deg, #ffb84d, var(--pink));
+  }
+  /* Retry: pink */
+  .download-btn[data-state="retry"] { color: #1a0510; background: linear-gradient(100deg, var(--pink), #ff7fb0); }
+  /* Busy: the button itself fills up as pages download */
+  .download-btn[data-state="busy"] {
+    color: #fff;
+    background: linear-gradient(90deg, rgba(56,232,255,.55) var(--p), rgba(56,232,255,.12) var(--p));
+    box-shadow: inset 0 0 0 1px rgba(56,232,255,.6);
+  }
+  .download-btn[data-state="busy"]::before { display: none; }
+
+  /* Cancel: compact pink square with a cross */
+  .cancel-btn {
+    display: none; align-items: center; justify-content: center;
+    width: 44px; min-height: 44px; padding: 0;
+    font-family: var(--head); font-weight: 700; font-size: 1.05rem;
+    color: var(--pink); background: rgba(255,61,139,.08);
+    border: 1px solid var(--pink); border-radius: 2px; cursor: pointer;
     transition: background .25s, color .25s, box-shadow .25s;
     -webkit-tap-highlight-color: transparent;
   }
-  .download-btn:hover { background: var(--cyan); color: #031018; box-shadow: 0 0 18px -6px var(--cyan); }
-  .download-btn:disabled { background: transparent; color: var(--muted); border-color: var(--line); box-shadow: none; cursor: not-allowed; }
-
-  .cancel-btn { display: none; min-width: 0; border-color: var(--pink); color: var(--pink); }
   .cancel-btn:hover { background: var(--pink); color: #1a0510; box-shadow: 0 0 18px -6px var(--pink); }
-  .cancel-btn:disabled { color: var(--muted); border-color: var(--line); }
+  .cancel-btn:disabled { color: var(--muted); border-color: var(--line); background: transparent; cursor: default; }
 
   /* ---------- Footer ---------- */
   footer {
@@ -293,7 +358,6 @@
 </head>
 <body>
 
-<div class="bg" aria-hidden="true"></div>
 <canvas id="net" aria-hidden="true"></canvas>
 <div class="veil" aria-hidden="true"></div>
 
@@ -527,20 +591,26 @@
         document.getElementById('count').textContent =
             chapters.length + (chapters.length === 1 ? ' chapter' : ' chapters');
 
-        chapters.forEach((chapter, index) => {
+        chapters.forEach(chapter => {
             const li = document.createElement('li');
             li.className = 'chapter-item';
 
-            const label = document.createElement('span');
-            label.textContent = `${index + 1}. ${chapter.title}`;
+            const info = document.createElement('div');
+            info.className = 'info';
+            const name = document.createElement('span');
+            name.className = 'name';
+            name.textContent = chapter.title;
+            const sub = document.createElement('span');
+            sub.className = 'sub';
+            info.appendChild(name);
+            info.appendChild(sub);
 
             const btn = document.createElement('button');
             btn.type = 'button';
             btn.className = 'download-btn';
-            btn.textContent = doneMap[chapter.url] ? 'Done ✓' : 'Download';
             btn.addEventListener('click', () => {
                 // Already downloaded? Ask before saving a second copy.
-                if (btn.textContent === 'Done ✓' &&
+                if (btn.dataset.state === 'done' &&
                     !confirm(`${chapter.title} was already downloaded. Download it again?`)) return;
                 downloadChapter(title, chapter, btn);
             });
@@ -548,8 +618,10 @@
 
             const cancelBtn = document.createElement('button');
             cancelBtn.type = 'button';
-            cancelBtn.className = 'download-btn cancel-btn';
-            cancelBtn.textContent = 'Cancel';
+            cancelBtn.className = 'cancel-btn';
+            cancelBtn.textContent = '✕';
+            cancelBtn.title = 'Cancel download';
+            cancelBtn.setAttribute('aria-label', 'Cancel download');
             btn._cancelBtn = cancelBtn;
 
             const actions = document.createElement('div');
@@ -557,13 +629,36 @@
             actions.appendChild(cancelBtn);
             actions.appendChild(btn);
 
-            li.appendChild(label);
+            li.appendChild(info);
             li.appendChild(actions);
             list.appendChild(li);
+
+            if (doneMap[chapter.url]) setBtn(btn, 'Done', 'done');
+            else setBtn(btn, 'Download', 'idle');
         });
 
         resultsDiv.style.display = 'block';
         markResumable();
+    }
+
+    // Set a chapter button's label and look. state: idle | done | resume | busy | retry
+    // (the row and the button both pick up the state, which drives the colours in the CSS)
+    const SUB_TEXT = {
+        idle: 'Ready to download',
+        done: 'Downloaded',
+        resume: 'Partly downloaded',
+        busy: 'Downloading…',
+        retry: 'Failed. Tap to retry'
+    };
+    function setBtn(btn, label, state, pct, sub) {
+        btn.textContent = label;
+        btn.dataset.state = state;
+        const li = btn.closest('.chapter-item');
+        if (!li) return;
+        li.dataset.state = state;
+        if (typeof pct === 'number') li.style.setProperty('--p', pct + '%');
+        const s = li.querySelector('.sub');
+        if (s) s.textContent = sub || SUB_TEXT[state] || '';
     }
 
     // Show "Resume 6/14" on chapters that were partly downloaded before the browser closed
@@ -575,7 +670,7 @@
             if (!btn || btn.disabled) continue;
             const meta = await getMeta(url);
             const n = await countPages(url);
-            if (meta && n > 0 && !btn.disabled) btn.textContent = `Resume ${n}/${meta.length}`;
+            if (meta && n > 0 && !btn.disabled) setBtn(btn, `Resume ${n}/${meta.length}`, 'resume', 0);
         }
     }
 
@@ -622,7 +717,7 @@
         }
 
         btn.disabled = true;
-        btn.textContent = 'Starting...';
+        setBtn(btn, 'Starting...', 'busy', 0, 'Starting…');
         let total = 0, done = 0;
 
         const quality = parseFloat(qualityEl.value) || 1;   // fixed for this download
@@ -634,7 +729,7 @@
             cancelBtn.disabled = false;
             cancelBtn.onclick = () => {
                 cancelBtn.disabled = true;
-                cancelBtn.textContent = 'Cancelling...';
+                cancelBtn.textContent = '…';
                 controller.abort();
             };
         }
@@ -662,7 +757,7 @@
             //    so a closed/killed browser can pick up from the pages already stored.
             const blobs = new Array(images.length);
             let next = 0;
-            btn.textContent = `0/${total}`;
+            setBtn(btn, `0/${total}`, 'busy', 0);
 
             async function runner() {
                 while (true) {
@@ -680,7 +775,7 @@
                         await savePage(chapter.url, i, blobs[i]);
                     }
                     done++;
-                    btn.textContent = `${done}/${total}`;
+                    setBtn(btn, `${done}/${total}`, 'busy', (done / total) * 100);
                 }
             }
             await Promise.all(Array.from({ length: PARALLEL_IMAGES }, runner));
@@ -690,7 +785,7 @@
             const pdfDoc = await PDFLib.PDFDocument.create();
             for (let i = 0; i < blobs.length; i++) {
                 if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
-                btn.textContent = `PDF ${i + 1}/${blobs.length}`;
+                setBtn(btn, `PDF ${i + 1}/${blobs.length}`, 'busy', ((i + 1) / blobs.length) * 100, 'Building PDF…');
                 const img = await embedImage(pdfDoc, blobs[i], quality);
                 blobs[i] = null; // release memory as we go
 
@@ -705,7 +800,7 @@
             const safe = s => s.replace(/[\\/:*?"<>|]+/g, '').trim();
             pdfDoc.setTitle(`${safe(mangaTitle)} - ${safe(chapter.title)}`);
 
-            btn.textContent = 'Saving...';
+            setBtn(btn, 'Saving...', 'busy', 100, 'Saving PDF…');
             const pdfBytes = await pdfDoc.save();
             const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
 
@@ -722,15 +817,15 @@
             saveDone();
             await clearChapterCache(chapter.url);
 
-            btn.textContent = 'Done ✓';
+            setBtn(btn, 'Done', 'done');
             showStatus(`Downloaded ${chapter.title} (${images.length} pages) as PDF`, 'success');
         } catch (err) {
             const cancelled = signal.aborted || err.name === 'AbortError';
             if (!cancelled) console.error(err);
             const stored = (await countPages(chapter.url)) || 0;
-            if (stored > 0 && total) btn.textContent = `Resume ${stored}/${total}`;
-            else if (cancelled) btn.textContent = doneMap[chapter.url] ? 'Done ✓' : 'Download';
-            else btn.textContent = 'Retry';
+            if (stored > 0 && total) setBtn(btn, `Resume ${stored}/${total}`, 'resume', 0);
+            else if (cancelled) doneMap[chapter.url] ? setBtn(btn, 'Done', 'done') : setBtn(btn, 'Download', 'idle');
+            else setBtn(btn, 'Retry', 'retry');
 
             if (cancelled) {
                 showStatus(stored > 0
@@ -743,7 +838,7 @@
             btn.disabled = false;
             if (cancelBtn) {
                 cancelBtn.style.display = 'none';
-                cancelBtn.textContent = 'Cancel';
+                cancelBtn.textContent = '✕';
                 cancelBtn.onclick = null;
             }
         }
@@ -845,5 +940,4 @@
     })();
 </script>
 </body>
-              </html>
-    
+</html>
