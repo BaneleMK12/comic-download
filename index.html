@@ -10,6 +10,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Sora:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
   :root {
     --bg: #050810;
@@ -195,6 +196,20 @@
   }
   select:focus { outline: none; border-color: var(--cyan); }
 
+  /* Format toggle: PDF / ZIP (images only) */
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 2px; overflow: hidden; }
+  .seg button {
+    min-height: 44px; padding: 0 18px; border: 0; cursor: pointer;
+    font-family: var(--head); font-weight: 700; font-size: .92rem; letter-spacing: .04em;
+    color: var(--muted); background: rgba(5,8,16,.7);
+    transition: color .25s, background .25s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button[aria-pressed="true"] { color: #031018; background: linear-gradient(100deg, var(--cyan), #7fb4ff); }
+  .seg button:disabled { cursor: default; opacity: .6; }
+  .hint { margin-top: 12px; font-size: .8rem; color: var(--muted); }
+
   .loader {
     border: 3px solid var(--line); border-top-color: var(--cyan);
     border-radius: 50%; width: 30px; height: 30px;
@@ -371,11 +386,19 @@
   <div class="wrap">
     <section class="panel">
       <div class="input-group">
-        <input type="text" id="mangaUrl" placeholder="Paste a Vortex or Asura series/chapter URL" value="https://vortexscans.org/series/became-the-patron-of-villains" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <input type="text" id="mangaUrl" placeholder="Paste a Vortex, Asura or Webtoons series/chapter URL" value="https://vortexscans.org/series/became-the-patron-of-villains" autocomplete="off" autocapitalize="off" spellcheck="false">
         <button id="fetchBtn" class="btn" type="button">Fetch</button>
       </div>
 
       <div class="option-row">
+        <label id="formatLabel">Save as</label>
+        <div class="seg" id="format" role="group" aria-labelledby="formatLabel">
+          <button type="button" data-format="pdf" aria-pressed="true">PDF</button>
+          <button type="button" data-format="zip" aria-pressed="false">ZIP (images)</button>
+        </div>
+      </div>
+
+      <div class="option-row" id="qualityRow">
         <label for="quality">PDF quality</label>
         <select id="quality">
           <option value="1">100% (Original)</option>
@@ -384,6 +407,8 @@
           <option value="0.5">50%</option>
         </select>
       </div>
+
+      <p class="hint">Keep this tab open while a chapter downloads. The screen is kept awake for you.</p>
 
       <div id="loader" class="loader"></div>
       <div id="status" role="status"></div>
@@ -409,7 +434,9 @@
 <script>
     // CONFIGURATION: must match your deployed Worker URL exactly
     const PROXY_API_URL = 'https://comic-download.makhanyabanele12.workers.dev';
-    const PARALLEL_IMAGES = 8;       // images downloaded at once
+    const PARALLEL_IMAGES = 6;       // images downloaded at once
+    const REQUEST_TIMEOUT = 40000;   // ms before a stuck request is dropped and retried
+    const REQUEST_TRIES = 4;         // attempts per request before giving up
     const MAX_PDF_DIM = 14400;       // PDF page size limit (points)
     const STATE_KEY = 'ms_state_v1';
 
@@ -451,12 +478,15 @@
     }
 
     // (database name kept as 'mangascraper' so already-saved pages still work)
+    // v2 adds the 'pdfs' store: finished PDFs, kept so the Open button works later.
     const dbPromise = new Promise(resolve => {
         try {
-            const req = indexedDB.open('mangascraper', 1);
+            const req = indexedDB.open('mangascraper', 2);
             req.onupgradeneeded = () => {
-                req.result.createObjectStore('pages');
-                req.result.createObjectStore('meta');
+                const db = req.result;
+                for (const name of ['pages', 'meta', 'pdfs']) {
+                    if (!db.objectStoreNames.contains(name)) db.createObjectStore(name);
+                }
             };
             req.onsuccess = () => resolve(req.result);
             req.onerror = () => resolve(null);
@@ -492,6 +522,66 @@
     async function clearAllCache() {
         await idb('pages', 'readwrite', s => s.clear());
         await idb('meta', 'readwrite', s => s.clear());
+        await idb('pdfs', 'readwrite', s => s.clear());   // store left over from the removed Open button
+    }
+
+    // ---------- Keep the screen awake while downloading ----------
+    // Phones freeze a page when the screen turns off, which is the usual reason a download
+    // "does nothing". A screen wake lock prevents that while a chapter is downloading.
+    let wakeLock = null, activeDownloads = 0;
+    async function requestWake() {
+        try {
+            if (!('wakeLock' in navigator) || wakeLock) return;
+            wakeLock = await navigator.wakeLock.request('screen');
+            wakeLock.addEventListener('release', () => { wakeLock = null; });
+        } catch (e) { wakeLock = null; }
+    }
+    function startWake() { activeDownloads++; requestWake(); }
+    function stopWake() {
+        activeDownloads = Math.max(0, activeDownloads - 1);
+        if (!activeDownloads && wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+    }
+    // The lock is dropped when the tab is hidden; take it again when you come back
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && activeDownloads > 0) requestWake();
+    });
+
+    // ---------- Requests that can't hang forever ----------
+    // Each attempt has a timeout; timeouts, network errors and 5xx/429 are retried with a pause.
+    // A cancel (outer signal) stops everything straight away.
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    function abortError() { return new DOMException('Cancelled', 'AbortError'); }
+
+    async function requestRetry(url, init, outer, read) {
+        let lastErr;
+        for (let attempt = 1; attempt <= REQUEST_TRIES; attempt++) {
+            if (outer.aborted) throw abortError();
+            const ctrl = new AbortController();
+            const onOuter = () => ctrl.abort();
+            outer.addEventListener('abort', onOuter, { once: true });
+            const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT);
+            try {
+                const res = await fetch(url, { ...init, signal: ctrl.signal });
+                if (!res.ok) {
+                    const retryable = res.status >= 500 || res.status === 429;
+                    const err = new Error(`status ${res.status}`);
+                    err.status = res.status;
+                    err.retryable = retryable;
+                    err.body = await res.json().catch(() => null);
+                    throw err;
+                }
+                return await read(res);   // reading the body is covered by the same timeout
+            } catch (e) {
+                if (outer.aborted) throw abortError();
+                lastErr = e.name === 'AbortError' ? Object.assign(new Error('timed out'), { retryable: true }) : e;
+                if (lastErr.retryable === false) throw lastErr;
+                if (attempt < REQUEST_TRIES) await sleep(600 * attempt);
+            } finally {
+                clearTimeout(timer);
+                outer.removeEventListener('abort', onOuter);
+            }
+        }
+        throw lastErr;
     }
 
     // ---------- UI ----------
@@ -510,8 +600,20 @@
         try { localStorage.setItem('ms_quality', qualityEl.value); } catch (e) {}
     });
 
+    // PDF / ZIP toggle (quality only applies to PDF)
+    let format = 'pdf';
+    const formatBtns = [...document.querySelectorAll('#format button')];
+    function setFormat(f) {
+        format = f === 'zip' ? 'zip' : 'pdf';
+        formatBtns.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.format === format)));
+        document.getElementById('qualityRow').style.display = format === 'pdf' ? 'flex' : 'none';
+        try { localStorage.setItem('ms_format', format); } catch (e) {}
+    }
+    formatBtns.forEach(b => b.addEventListener('click', () => setFormat(b.dataset.format)));
+    try { setFormat(localStorage.getItem('ms_format') || 'pdf'); } catch (e) { setFormat('pdf'); }
+
     document.getElementById('clearBtn').addEventListener('click', async () => {
-        if (!confirm('Clear the saved chapter list, download history (Done marks) and any partly downloaded pages?')) return;
+        if (!confirm('Clear the saved chapter list, download history (Done marks) and any partly downloaded pages? Your downloaded files are not touched.')) return;
         try { localStorage.removeItem(STATE_KEY); localStorage.removeItem(DONE_KEY); } catch (e) {}
         await clearAllCache();
         doneMap = {};
@@ -633,7 +735,7 @@
             li.appendChild(actions);
             list.appendChild(li);
 
-            if (doneMap[chapter.url]) setBtn(btn, 'Done', 'done');
+            if (doneMap[chapter.url]) setBtn(btn, 'Done', 'done', undefined, doneSub(doneMap[chapter.url]));
             else setBtn(btn, 'Download', 'idle');
         });
 
@@ -650,6 +752,9 @@
         busy: 'Downloading…',
         retry: 'Failed. Tap to retry'
     };
+    // doneMap values: 'pdf' / 'zip' (older entries are just true)
+    const doneSub = f => f === 'zip' ? 'Downloaded as ZIP' : f === 'pdf' ? 'Downloaded as PDF' : 'Downloaded';
+
     function setBtn(btn, label, state, pct, sub) {
         btn.textContent = label;
         btn.dataset.state = state;
@@ -710,17 +815,37 @@
         }
     }
 
+    // File extension for an image, taken from its first bytes (falls back to the URL)
+    async function imageExt(blob, url) {
+        try {
+            const b = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
+            if (b[0] === 0xFF && b[1] === 0xD8) return 'jpg';
+            if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47) return 'png';
+            if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return 'gif';
+            if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45) return 'webp';
+            if (b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) return 'avif';
+        } catch (e) {}
+        const m = String(url).split('?')[0].match(/\.(jpe?g|png|webp|avif|gif)$/i);
+        return m ? m[1].toLowerCase().replace('jpeg', 'jpg') : 'jpg';
+    }
+
     async function downloadChapter(mangaTitle, chapter, btn) {
-        if (typeof PDFLib === 'undefined') {
+        const fmt = format;   // fixed for this download
+        if (fmt === 'pdf' && typeof PDFLib === 'undefined') {
             showStatus('Error: the PDF library failed to load. Check your connection and reload the page.', 'error');
+            return;
+        }
+        if (fmt === 'zip' && typeof JSZip === 'undefined') {
+            showStatus('Error: the ZIP library failed to load. Check your connection and reload the page.', 'error');
             return;
         }
 
         btn.disabled = true;
         setBtn(btn, 'Starting...', 'busy', 0, 'Starting…');
+        startWake();
         let total = 0, done = 0;
 
-        const quality = parseFloat(qualityEl.value) || 1;   // fixed for this download
+        const quality = parseFloat(qualityEl.value) || 1;   // fixed for this download (PDF only)
         const controller = new AbortController();
         const signal = controller.signal;
         const cancelBtn = btn._cancelBtn;
@@ -738,15 +863,19 @@
             // 1. Page list: reuse the saved one when resuming, otherwise ask the Worker
             let images = await getMeta(chapter.url);
             if (!images || !images.length) {
-                const res = await fetch(`${PROXY_API_URL}/images`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url: chapter.url }),
-                    signal
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok || !data.success) {
-                    throw new Error(data.error || `Server Error: ${res.status}`);
+                let data;
+                try {
+                    data = await requestRetry(`${PROXY_API_URL}/images`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url: chapter.url })
+                    }, signal, res => res.json());
+                } catch (e) {
+                    if (e.name === 'AbortError') throw e;
+                    throw new Error((e.body && e.body.error) || `Could not get the page list (${e.message})`);
+                }
+                if (!data || !data.success || !Array.isArray(data.images)) {
+                    throw new Error((data && data.error) || 'Could not get the page list');
                 }
                 images = data.images;
                 await saveMeta(chapter.url, images);
@@ -769,9 +898,13 @@
                     if (cached) {
                         blobs[i] = cached;
                     } else {
-                        const r = await fetch(`${PROXY_API_URL}/img?u=${encodeURIComponent(images[i])}`, { signal });
-                        if (!r.ok) throw new Error(`Page ${i + 1} failed (status ${r.status})`);
-                        blobs[i] = await r.blob();
+                        try {
+                            blobs[i] = await requestRetry(
+                                `${PROXY_API_URL}/img?u=${encodeURIComponent(images[i])}`, {}, signal, res => res.blob());
+                        } catch (e) {
+                            if (e.name === 'AbortError') throw e;
+                            throw new Error(`Page ${i + 1} failed (${e.message})`);
+                        }
                         await savePage(chapter.url, i, blobs[i]);
                     }
                     done++;
@@ -779,46 +912,65 @@
                 }
             }
             await Promise.all(Array.from({ length: PARALLEL_IMAGES }, runner));
-            if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
-
-            // 3. Build the PDF: one page per image, page size = image size
-            const pdfDoc = await PDFLib.PDFDocument.create();
-            for (let i = 0; i < blobs.length; i++) {
-                if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
-                setBtn(btn, `PDF ${i + 1}/${blobs.length}`, 'busy', ((i + 1) / blobs.length) * 100, 'Building PDF…');
-                const img = await embedImage(pdfDoc, blobs[i], quality);
-                blobs[i] = null; // release memory as we go
-
-                let w = img.width, h = img.height;
-                const scale = Math.min(1, MAX_PDF_DIM / Math.max(w, h));
-                w *= scale; h *= scale;
-
-                const page = pdfDoc.addPage([w, h]);
-                page.drawImage(img, { x: 0, y: 0, width: w, height: h });
-            }
+            if (signal.aborted) throw abortError();
 
             const safe = s => s.replace(/[\\/:*?"<>|]+/g, '').trim();
-            pdfDoc.setTitle(`${safe(mangaTitle)} - ${safe(chapter.title)}`);
+            const baseName = `${safe(mangaTitle)} - ${safe(chapter.title)}`;
+            let outBlob, outName;
 
-            setBtn(btn, 'Saving...', 'busy', 100, 'Saving PDF…');
-            const pdfBytes = await pdfDoc.save();
-            const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
+            if (fmt === 'zip') {
+                // 3a. ZIP: the original images, numbered in reading order, no re-encoding
+                const zip = new JSZip();
+                for (let i = 0; i < blobs.length; i++) {
+                    if (signal.aborted) throw abortError();
+                    const ext = await imageExt(blobs[i], images[i]);
+                    zip.file(String(i + 1).padStart(3, '0') + '.' + ext, blobs[i]);
+                    blobs[i] = null; // JSZip keeps its own reference; release ours
+                }
+                setBtn(btn, 'Zipping...', 'busy', 0, 'Building ZIP…');
+                outBlob = await zip.generateAsync(
+                    { type: 'blob', compression: 'STORE' },
+                    meta => setBtn(btn, `ZIP ${Math.round(meta.percent)}%`, 'busy', meta.percent, 'Building ZIP…')
+                );
+                outName = `${baseName}.zip`;
+            } else {
+                // 3b. PDF: one page per image, page size = image size
+                const pdfDoc = await PDFLib.PDFDocument.create();
+                for (let i = 0; i < blobs.length; i++) {
+                    if (signal.aborted) throw abortError();
+                    setBtn(btn, `PDF ${i + 1}/${blobs.length}`, 'busy', ((i + 1) / blobs.length) * 100, 'Building PDF…');
+                    const img = await embedImage(pdfDoc, blobs[i], quality);
+                    blobs[i] = null; // release memory as we go
+
+                    let w = img.width, h = img.height;
+                    const scale = Math.min(1, MAX_PDF_DIM / Math.max(w, h));
+                    w *= scale; h *= scale;
+
+                    const page = pdfDoc.addPage([w, h]);
+                    page.drawImage(img, { x: 0, y: 0, width: w, height: h });
+                }
+                pdfDoc.setTitle(baseName);
+
+                setBtn(btn, 'Saving...', 'busy', 100, 'Saving PDF…');
+                outBlob = new Blob([await pdfDoc.save()], { type: 'application/pdf' });
+                outName = `${baseName}.pdf`;
+            }
 
             const a = document.createElement('a');
-            a.href = URL.createObjectURL(pdfBlob);
-            a.download = `${safe(mangaTitle)} - ${safe(chapter.title)}.pdf`;
+            a.href = URL.createObjectURL(outBlob);
+            a.download = outName;
             document.body.appendChild(a);
             a.click();
             a.remove();
             setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 
             // Finished: remember it and free the stored pages
-            doneMap[chapter.url] = true;
+            doneMap[chapter.url] = fmt;
             saveDone();
             await clearChapterCache(chapter.url);
 
-            setBtn(btn, 'Done', 'done');
-            showStatus(`Downloaded ${chapter.title} (${images.length} pages) as PDF`, 'success');
+            setBtn(btn, 'Done', 'done', undefined, doneSub(fmt));
+            showStatus(`Downloaded ${chapter.title} (${images.length} pages) as ${fmt.toUpperCase()}`, 'success');
         } catch (err) {
             const cancelled = signal.aborted || err.name === 'AbortError';
             if (!cancelled) console.error(err);
@@ -835,6 +987,7 @@
                 showStatus(`Download failed: ${err.message}`, 'error');
             }
         } finally {
+            stopWake();
             btn.disabled = false;
             if (cancelBtn) {
                 cancelBtn.style.display = 'none';
@@ -852,6 +1005,7 @@
     }
 
     // ---------- Restore the last session on open ----------
+    idb('pdfs', 'readwrite', s => s.clear());   // free space used by the removed Open button
     loadDone();
     loadState();
     if (state.chapters.length) {

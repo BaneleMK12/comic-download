@@ -9,7 +9,8 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/
 
 // Supported sites. A URL is allowed if its host is one of these or a subdomain of one
 // (e.g. storage.vortexscans.org). To support another site, add its domain here.
-const ALLOWED_SITES = ['vortexscans.org', 'asurascans.com', 'asuracomic.net'];
+// (pstatic.net is Webtoons' image host.)
+const ALLOWED_SITES = ['vortexscans.org', 'asurascans.com', 'asuracomic.net', 'webtoons.com', 'pstatic.net'];
 
 const json = (obj, status = 200) =>
   new Response(JSON.stringify(obj), {
@@ -32,18 +33,102 @@ const isAllowedHost = u => !!siteOf(u);
 function normalizeUrl(u) {
   u = String(u || '').trim();
   if (!u) return '';
-  return /^https?:\/\//i.test(u) ? u : 'https://' + u.replace(/^\/+/, '');
+  u = /^https?:\/\//i.test(u) ? u : 'https://' + u.replace(/^\/+/, '');
+  // Webtoons mobile links (m.webtoons.com) just redirect to the main site
+  return u.replace(/^(https?:\/\/)m\.webtoons\.com/i, '$1www.webtoons.com');
 }
 
-// Image hosts often check the Referer, so send the main site's address
-const refererFor = u => (siteOf(u) ? `https://${siteOf(u)}/` : 'https://vortexscans.org/');
+const isWebtoon = u => siteOf(u) === 'webtoons.com';
 
-const pageHeaders = referer => ({
-  'User-Agent': UA,
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.9',
-  'Referer': referer
-});
+// Image hosts often check the Referer, so send the main site's address
+function refererFor(u) {
+  const s = siteOf(u);
+  if (s === 'webtoons.com' || s === 'pstatic.net') return 'https://www.webtoons.com/';
+  return s ? `https://${s}/` : 'https://vortexscans.org/';
+}
+
+const pageHeaders = referer => {
+  const h = {
+    'User-Agent': UA,
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Referer': referer
+  };
+  // Webtoons shows consent / age pages unless these cookies are present
+  if (referer.includes('webtoons.com')) {
+    h['Cookie'] = 'ageGatePass=true; needGDPR=false; needCCPA=false; needCOPPA=false';
+  }
+  return h;
+};
+
+// ---------- Webtoons ----------
+// Any webtoons link (viewer, list or series page) -> the pieces we need.
+// The chapter list lives at <base>/list?title_no=<id>
+function webtoonInfo(u) {
+  try {
+    const x = new URL(u);
+    const parts = x.pathname.split('/').filter(Boolean); // [lang, genre, slug, ...]
+    const titleNo = x.searchParams.get('title_no');
+    if (parts.length < 3 || !titleNo) return null;
+    const base = `${x.origin}/${parts[0]}/${parts[1]}/${parts[2]}`;
+    return { base, titleNo, listUrl: `${base}/list?title_no=${titleNo}` };
+  } catch {
+    return null;
+  }
+}
+
+// The list page only shows the newest few episodes per page, so read the highest
+// episode number from it and build the full 1..N list from that.
+function parseWebtoonSeries(html, info) {
+  html = html.replace(/&amp;/g, '&');
+
+  const t =
+    html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)/i) ||
+    html.match(/<title>([^<]+)/i);
+  const title = (t ? t[1] : 'Unknown title')
+    .replace(/&#x27;|&#39;/g, "'")
+    .split(/\s[|–-]\s/)[0].trim();
+
+  const found = new Map();
+  for (const m of html.matchAll(/href=["']([^"']*\/viewer\?[^"']*)["']/gi)) {
+    const no = m[1].match(/episode_no=(\d+)/i);
+    const tn = m[1].match(/title_no=(\d+)/i);
+    if (!no || (tn && tn[1] !== info.titleNo)) continue;
+    let abs;
+    try { abs = new URL(m[1], info.base).href; } catch { continue; }
+    found.set(parseInt(no[1], 10), abs);
+  }
+  if (!found.size) return { title, chapters: [] };
+
+  const max = Math.max(...found.keys());
+  const chapters = [];
+  for (let n = 1; n <= max; n++) {
+    chapters.push({
+      title: `Episode ${n}`,
+      url: found.get(n) || `${info.base}/episode-${n}/viewer?title_no=${info.titleNo}&episode_no=${n}`
+    });
+  }
+  return { title, chapters };
+}
+
+// Panels are <img class="_images" data-url="..."> inside the viewer, in reading order.
+function parseWebtoonImages(html) {
+  html = html.replace(/&amp;/g, '&');
+  const out = [];
+  const seen = new Set();
+  const add = u => { if (u && !seen.has(u)) { seen.add(u); out.push(u); } };
+
+  for (const m of html.matchAll(/<img\b[^>]*>/gi)) {
+    const tag = m[0];
+    if (!/class=["'][^"']*\b_images\b/i.test(tag)) continue;
+    add((tag.match(/data-url=["']([^"']+)["']/i) || [])[1]);
+  }
+  if (out.length) return out;
+
+  // Fallback: any lazy-loaded image on the image CDN
+  for (const m of html.matchAll(/data-url=["'](https?:\/\/[^"']*pstatic\.net[^"']+)["']/gi)) add(m[1]);
+  return out;
+}
 
 function parsePage(html, seriesUrl) {
   html = html.replace(/\\u002F|\\\//g, '/');
@@ -117,6 +202,8 @@ function parsePage(html, seriesUrl) {
 // attributes and image URLs inside embedded JSON). The chapter's pages share one folder,
 // so we keep the folder with the most images and drop covers, logos, thumbnails, etc.
 function parseImages(html, pageUrl) {
+  if (isWebtoon(pageUrl)) return parseWebtoonImages(html);
+
   html = html
     .replace(/\\u002F|\\\//g, '/')
     .replace(/&amp;/g, '&');
@@ -181,6 +268,23 @@ export default {
       if (!targetUrl) return json({ error: 'Missing URL' }, 400);
       if (!isAllowedHost(targetUrl)) {
         return json({ error: `Unsupported site. Supported: ${ALLOWED_SITES.join(', ')}` }, 400);
+      }
+
+      // Webtoons: build the list page address from any webtoons link
+      if (isWebtoon(targetUrl)) {
+        const info = webtoonInfo(targetUrl);
+        if (!info) {
+          return json({ error: 'That Webtoons link needs a title_no (it looks like ...?title_no=2409).' }, 400);
+        }
+        try {
+          const res = await fetch(info.listUrl, { headers: pageHeaders(refererFor(info.listUrl)) });
+          if (!res.ok) throw new Error(`Webtoons returned status: ${res.status}`);
+          const { title, chapters } = parseWebtoonSeries(await res.text(), info);
+          if (!chapters.length) return json({ error: 'No episodes found on the Webtoons list page.' }, 404);
+          return json({ success: true, title, chapters });
+        } catch (e) {
+          return json({ error: e.message }, 500);
+        }
       }
 
       const seriesUrl = targetUrl.split(/\/chapter/i)[0];
