@@ -240,13 +240,20 @@ function parseImages(html, pageUrl) {
 
   const pages = found.filter(u => folderOf(u) === best);
 
-  // Sort by page number in the filename (01.jpg, 002.webp, ...) when every page has one;
-  // otherwise keep the order they appear in the page.
+  // The order the images appear in the page IS the reading order, so keep it.
+  // Only re-sort by filename number when the numbers are a clean, gap-free run
+  // (01, 02, 03 ... N), which is a sign they really are page numbers. Filenames that merely
+  // end in a digit (hashes, timestamps) would otherwise scramble the pages.
   const numOf = u => {
     const m = u.split('?')[0].match(/(\d+)\.[a-z0-9]+$/i);
     return m ? parseInt(m[1], 10) : null;
   };
-  if (pages.every(u => numOf(u) !== null)) pages.sort((a, b) => numOf(a) - numOf(b));
+  const nums = pages.map(numOf);
+  if (nums.length > 1 && nums.every(n => n !== null)) {
+    const unique = new Set(nums).size === nums.length;
+    const consecutive = Math.max(...nums) - Math.min(...nums) === nums.length - 1;
+    if (unique && consecutive) pages.sort((a, b) => numOf(a) - numOf(b));
+  }
   return pages;
 }
 
