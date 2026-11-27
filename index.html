@@ -350,6 +350,73 @@
   .cancel-btn:hover { background: var(--pink); color: #1a0510; box-shadow: 0 0 18px -6px var(--pink); }
   .cancel-btn:disabled { color: var(--muted); border-color: var(--line); background: transparent; cursor: default; }
 
+
+  /* ---------- History ---------- */
+  #history { margin-top: clamp(36px, 6vh, 56px); display: none; }
+  .history-list {
+    list-style: none; display: none; gap: 14px;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  }
+  #history.open .history-list { display: grid; }
+  #history:not(.open) .section-head { margin-bottom: 0; }
+
+  .history-item {
+    position: relative; overflow: hidden;
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 12px 12px 20px;
+    background:
+      linear-gradient(135deg, rgba(138,108,255,.10), transparent 50%),
+      linear-gradient(180deg, var(--panel-2), var(--panel));
+    border: 1px solid var(--line); border-radius: 4px;
+  }
+  .history-item::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+    background: linear-gradient(180deg, var(--violet), #b58bff);
+    box-shadow: 0 0 14px var(--violet);
+  }
+  .h-avatar {
+    position: relative; flex: none; width: 56px; height: 56px; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--head); font-weight: 700; font-size: 1.4rem; color: var(--cyan);
+    background: rgba(5,8,16,.8); border: 1px solid var(--line); border-radius: 2px;
+  }
+  .h-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: var(--panel); }
+  .h-info { min-width: 0; flex: 1 1 auto; }
+  .h-name {
+    display: block; font-family: var(--head); font-weight: 600; font-size: 1.05rem; line-height: 1.25;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .h-link {
+    display: block; margin-top: 2px; font-size: .74rem; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .h-actions { display: flex; gap: 8px; align-items: center; flex: none; }
+  .copy-btn {
+    min-height: 40px; min-width: 76px; padding: 0 14px;
+    font-family: var(--head); font-weight: 700; font-size: .88rem; letter-spacing: .04em;
+    color: var(--cyan); background: rgba(56,232,255,.08);
+    border: 1px solid rgba(56,232,255,.5); border-radius: 2px; cursor: pointer;
+    transition: background .25s, color .25s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .copy-btn:hover { background: rgba(56,232,255,.18); }
+  .copy-btn.copied { color: #031018; background: linear-gradient(100deg, var(--cyan), #7fb4ff); border-color: transparent; }
+  .del-btn {
+    width: 40px; min-height: 40px; padding: 0; font-size: 1rem;
+    font-family: var(--head); font-weight: 700;
+    color: var(--muted); background: transparent;
+    border: 1px solid var(--line); border-radius: 2px; cursor: pointer;
+    transition: color .25s, border-color .25s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .del-btn:hover { color: var(--pink); border-color: var(--pink); }
+  .head-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+  @media (max-width: 480px) {
+    .h-avatar { width: 48px; height: 48px; }
+    .copy-btn { min-width: 64px; padding: 0 10px; }
+  }
+
   /* ---------- Footer ---------- */
   footer {
     border-top: 1px solid rgba(28,42,68,.8);
@@ -412,6 +479,20 @@
 
       <div id="loader" class="loader"></div>
       <div id="status" role="status"></div>
+    </section>
+
+    <section id="history" aria-label="History">
+      <div class="section-head">
+        <div>
+          <h2>History</h2>
+          <span class="count" id="historyCount"></span>
+        </div>
+        <div class="head-actions">
+          <button id="historyToggle" class="filter" type="button" aria-expanded="false" aria-controls="historyList">Show</button>
+          <button id="historyClear" class="filter" type="button">Clear history</button>
+        </div>
+      </div>
+      <ul id="historyList" class="history-list"></ul>
     </section>
 
     <section id="results" aria-label="Chapters">
@@ -524,6 +605,150 @@
         await idb('meta', 'readwrite', s => s.clear());
         await idb('pdfs', 'readwrite', s => s.clear());   // store left over from the removed Open button
     }
+
+    // ---------- History: every link that was fetched successfully ----------
+    const HISTORY_KEY = 'ms_history_v1';
+    const HISTORY_OPEN_KEY = 'ms_history_open';
+    const HISTORY_MAX = 30;
+    let fetchHistory = [];
+    let historyOpen = false;
+
+    function loadHistory() {
+        try {
+            const h = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+            fetchHistory = Array.isArray(h) ? h.filter(x => x && x.url) : [];
+            historyOpen = localStorage.getItem(HISTORY_OPEN_KEY) === '1';
+        } catch (e) { fetchHistory = []; }
+    }
+
+    function saveHistory() {
+        try { localStorage.setItem(HISTORY_KEY, JSON.stringify(fetchHistory)); } catch (e) {}
+    }
+
+    function addHistory(url, title, image, count) {
+        const old = fetchHistory.find(h => h.url === url);
+        fetchHistory = [
+            { url, title: title || url, image: image || (old && old.image) || '', count, time: Date.now() },
+            ...fetchHistory.filter(h => h.url !== url)
+        ].slice(0, HISTORY_MAX);
+        saveHistory();
+        renderHistory();
+    }
+
+    async function copyText(text) {
+        try {
+            await navigator.clipboard.writeText(text);
+            return true;
+        } catch (e) {
+            // Older browsers / non-secure pages: copy through a temporary text box
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;';
+            document.body.appendChild(ta);
+            ta.select();
+            ta.setSelectionRange(0, text.length);
+            let ok = false;
+            try { ok = document.execCommand('copy'); } catch (err) {}
+            ta.remove();
+            return ok;
+        }
+    }
+
+    function renderHistory() {
+        const box = document.getElementById('history');
+        const list = document.getElementById('historyList');
+        list.innerHTML = '';
+
+        if (!fetchHistory.length) { box.style.display = 'none'; return; }
+        box.style.display = 'block';
+        box.classList.toggle('open', historyOpen);
+
+        const toggle = document.getElementById('historyToggle');
+        toggle.textContent = historyOpen ? 'Hide' : 'Show';
+        toggle.setAttribute('aria-expanded', String(historyOpen));
+        document.getElementById('historyCount').textContent =
+            fetchHistory.length + (fetchHistory.length === 1 ? ' link' : ' links');
+
+        for (const item of fetchHistory) {
+            const li = document.createElement('li');
+            li.className = 'history-item';
+
+            // Picture: the series cover (through the Worker, since image hosts check the Referer).
+            // The first letter of the name sits underneath and shows when there is no picture.
+            const av = document.createElement('div');
+            av.className = 'h-avatar';
+            av.textContent = (item.title || '?').trim().charAt(0).toUpperCase() || '?';
+            if (item.image) {
+                const img = document.createElement('img');
+                img.alt = '';
+                img.loading = 'lazy';
+                img.onerror = () => img.remove();
+                img.src = `${PROXY_API_URL}/img?u=${encodeURIComponent(item.image)}`;
+                av.appendChild(img);
+            }
+
+            const info = document.createElement('div');
+            info.className = 'h-info';
+            const name = document.createElement('span');
+            name.className = 'h-name';
+            name.textContent = item.title;
+            name.title = item.title;
+            const link = document.createElement('span');
+            link.className = 'h-link';
+            link.textContent = item.url;
+            link.title = item.url;
+            info.appendChild(name);
+            info.appendChild(link);
+
+            const copyBtn = document.createElement('button');
+            copyBtn.type = 'button';
+            copyBtn.className = 'copy-btn';
+            copyBtn.textContent = 'Copy';
+            copyBtn.setAttribute('aria-label', `Copy link for ${item.title}`);
+            copyBtn.addEventListener('click', async () => {
+                const ok = await copyText(item.url);
+                copyBtn.textContent = ok ? 'Copied' : 'Failed';
+                copyBtn.classList.toggle('copied', ok);
+                setTimeout(() => { copyBtn.textContent = 'Copy'; copyBtn.classList.remove('copied'); }, 1500);
+            });
+
+            const delBtn = document.createElement('button');
+            delBtn.type = 'button';
+            delBtn.className = 'del-btn';
+            delBtn.textContent = '✕';
+            delBtn.title = 'Remove from history';
+            delBtn.setAttribute('aria-label', `Remove ${item.title} from history`);
+            delBtn.addEventListener('click', () => {
+                fetchHistory = fetchHistory.filter(h => h.url !== item.url);
+                saveHistory();
+                renderHistory();
+            });
+
+            const actions = document.createElement('div');
+            actions.className = 'h-actions';
+            actions.appendChild(copyBtn);
+            actions.appendChild(delBtn);
+
+            li.appendChild(av);
+            li.appendChild(info);
+            li.appendChild(actions);
+            list.appendChild(li);
+        }
+    }
+
+    document.getElementById('historyToggle').addEventListener('click', () => {
+        historyOpen = !historyOpen;
+        try { localStorage.setItem(HISTORY_OPEN_KEY, historyOpen ? '1' : '0'); } catch (e) {}
+        renderHistory();
+    });
+
+    document.getElementById('historyClear').addEventListener('click', () => {
+        if (!confirm('Clear all links from History?')) return;
+        fetchHistory = [];
+        saveHistory();
+        renderHistory();
+    });
 
     // ---------- Keep the screen awake while downloading ----------
     // Phones freeze a page when the screen turns off, which is the usual reason a download
@@ -664,6 +889,7 @@
                     chapters: data.chapters
                 };
                 saveState();
+                addHistory(urlInput, data.title, data.image, data.chapters.length);
                 renderChapters(data.chapters, data.title);
                 showStatus(`Found ${data.chapters.length} chapters for ${data.title}`, 'success');
             } else {
@@ -1008,6 +1234,8 @@
     idb('pdfs', 'readwrite', s => s.clear());   // free space used by the removed Open button
     loadDone();
     loadState();
+    loadHistory();
+    renderHistory();
     if (state.chapters.length) {
         if (state.url) document.getElementById('mangaUrl').value = state.url;
         renderChapters(state.chapters, state.title);

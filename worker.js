@@ -29,6 +29,9 @@ function siteOf(u) {
 
 const isAllowedHost = u => !!siteOf(u);
 
+// Only return a cover picture that /img is allowed to fetch; otherwise the page shows its letter tile
+const coverOrEmpty = u => (u && isAllowedHost(u) ? u : '');
+
 // "asurascans.com/comics/..." (no https://) -> "https://asurascans.com/comics/..."
 function normalizeUrl(u) {
   u = String(u || '').trim();
@@ -307,7 +310,7 @@ export default {
           if (!res.ok) throw new Error(`Webtoons returned status: ${res.status}`);
           const { title, chapters, image } = parseWebtoonSeries(await res.text(), info);
           if (!chapters.length) return json({ error: 'No episodes found on the Webtoons list page.' }, 404);
-          return json({ success: true, title, chapters, image, seriesUrl: info.listUrl });
+          return json({ success: true, title, chapters, image: coverOrEmpty(image), seriesUrl: info.listUrl });
         } catch (e) {
           return json({ error: e.message }, 500);
         }
@@ -323,7 +326,7 @@ export default {
         if (!chapters.length) {
           return json({ error: 'No chapter links found in the page HTML.' }, 404);
         }
-        return json({ success: true, title, chapters });
+        return json({ success: true, title, chapters, image: coverOrEmpty(image) });
       } catch (e) {
         return json({ error: e.message }, 500);
       }
