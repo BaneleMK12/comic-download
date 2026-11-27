@@ -77,6 +77,15 @@ function webtoonInfo(u) {
   }
 }
 
+// Cover picture of a series (the page's og:image / twitter:image), as a full address
+function ogImage(html, base) {
+  const m =
+    html.match(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image)["'][^>]+content=["']([^"']+)/i) ||
+    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:image|twitter:image)["']/i);
+  if (!m) return '';
+  try { return new URL(m[1].replace(/&amp;/g, '&'), base).href; } catch { return ''; }
+}
+
 // The list page only shows the newest few episodes per page, so read the highest
 // episode number from it and build the full 1..N list from that.
 function parseWebtoonSeries(html, info) {
@@ -98,7 +107,8 @@ function parseWebtoonSeries(html, info) {
     try { abs = new URL(m[1], info.base).href; } catch { continue; }
     found.set(parseInt(no[1], 10), abs);
   }
-  if (!found.size) return { title, chapters: [] };
+  const image = ogImage(html, info.base);
+  if (!found.size) return { title, chapters: [], image };
 
   const max = Math.max(...found.keys());
   const chapters = [];
@@ -108,7 +118,7 @@ function parseWebtoonSeries(html, info) {
       url: found.get(n) || `${info.base}/episode-${n}/viewer?title_no=${info.titleNo}&episode_no=${n}`
     });
   }
-  return { title, chapters };
+  return { title, chapters, image };
 }
 
 // Panels are <img class="_images" data-url="..."> inside the viewer, in reading order.
@@ -194,6 +204,7 @@ function parsePage(html, seriesUrl) {
   chapters.sort((a, b) => a.num - b.num);
   return {
     title,
+    image: ogImage(html, seriesUrl),
     chapters: chapters.map(c => ({ title: `Chapter ${c.num}`, url: c.url }))
   };
 }
@@ -294,9 +305,9 @@ export default {
         try {
           const res = await fetch(info.listUrl, { headers: pageHeaders(refererFor(info.listUrl)) });
           if (!res.ok) throw new Error(`Webtoons returned status: ${res.status}`);
-          const { title, chapters } = parseWebtoonSeries(await res.text(), info);
+          const { title, chapters, image } = parseWebtoonSeries(await res.text(), info);
           if (!chapters.length) return json({ error: 'No episodes found on the Webtoons list page.' }, 404);
-          return json({ success: true, title, chapters });
+          return json({ success: true, title, chapters, image, seriesUrl: info.listUrl });
         } catch (e) {
           return json({ error: e.message }, 500);
         }
@@ -308,7 +319,7 @@ export default {
         const res = await fetch(seriesUrl, { headers: pageHeaders(refererFor(seriesUrl)) });
         if (!res.ok) throw new Error(`Target site returned status: ${res.status}`);
 
-        const { title, chapters } = parsePage(await res.text(), seriesUrl);
+        const { title, chapters, image } = parsePage(await res.text(), seriesUrl);
         if (!chapters.length) {
           return json({ error: 'No chapter links found in the page HTML.' }, 404);
         }
