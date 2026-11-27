@@ -209,7 +209,15 @@ function parseImages(html, pageUrl) {
     .replace(/&amp;/g, '&');
 
   const IMG_EXT = /\.(?:jpe?g|png|webp|avif)(?:$|\?)/i;
-  const SKIP = /featured|cover|thumb|logo|avatar|icon|banner|sprite|favicon|emoji|placeholder|loading|\/ads?\//i;
+  // Skip covers, logos, avatars etc. Judge the FILENAME and whole folder names only, never the
+  // full address: a series called "My Avatars" or "Icon of the Dungeon" has those words in
+  // every chapter image's path, and matching them there rejects every real page.
+  const SKIP_NAME = /cover|thumb|logo|avatar|icon|banner|sprite|favicon|emoji|placeholder|loading|transparency/i;
+  const SKIP_DIR = /\/(?:featured|covers?|thumbs?|thumbnails?|avatars?|icons?|logos?|banners?|ads?|emoji)\//i;
+  const SKIP = u => {
+    const path = u.split('?')[0];
+    return SKIP_NAME.test(path.slice(path.lastIndexOf('/') + 1)) || SKIP_DIR.test(path);
+  };
 
   // Collect candidates in page order
   const candidates = [];
@@ -227,7 +235,7 @@ function parseImages(html, pageUrl) {
   for (const c of candidates) {
     let u;
     try { u = new URL(c.raw.trim(), pageUrl).href; } catch { continue; }
-    if (!/^https?:/i.test(u) || !IMG_EXT.test(u) || SKIP.test(u) || seen.has(u)) continue;
+    if (!/^https?:/i.test(u) || !IMG_EXT.test(u) || SKIP(u) || seen.has(u)) continue;
     seen.add(u);
     found.push(u);
   }
@@ -324,9 +332,17 @@ export default {
         const res = await fetch(chapterUrl, { headers: pageHeaders(refererFor(chapterUrl)) });
         if (!res.ok) throw new Error(`Chapter page returned status: ${res.status}`);
 
-        const images = parseImages(await res.text(), chapterUrl);
+        const html = await res.text();
+        const images = parseImages(html, chapterUrl);
         if (!images.length) {
-          return json({ error: 'No page images found (chapter may be locked or not released).' }, 404);
+          // Say WHY, so a failure can be diagnosed from the message alone
+          const botCheck = /just a moment|challenge-platform|cf-browser-verification/i.test(html);
+          const imgTags = (html.match(/<img\b/gi) || []).length;
+          return json({
+            error: botCheck
+              ? 'The site showed the Worker a bot-check page instead of the chapter.'
+              : `No page images found in the chapter page (${html.length} bytes, ${imgTags} image tags). It may be locked or not released, or the site loads its images with JavaScript.`
+          }, 404);
         }
         // Make sure /img will accept every image host we're about to hand out
         const blocked = images.find(u => !isAllowedHost(u));
