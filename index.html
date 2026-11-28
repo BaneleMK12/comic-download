@@ -1129,7 +1129,10 @@
                                 `${PROXY_API_URL}/img?u=${encodeURIComponent(images[i])}`, {}, signal, res => res.blob());
                         } catch (e) {
                             if (e.name === 'AbortError') throw e;
-                            throw new Error(`Page ${i + 1} failed (${e.message})`);
+                            // Prefer the Worker's own explanation; name the file so a failure can be traced
+                            const why = (e.body && e.body.error) || e.message;
+                            const file = decodeURIComponent((images[i].split('?')[0].split('/').pop()) || '');
+                            throw new Error(`Page ${i + 1} failed (${why})${file ? ' – ' + file : ''}`);
                         }
                         await savePage(chapter.url, i, blobs[i]);
                     }

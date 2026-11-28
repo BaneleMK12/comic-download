@@ -279,8 +279,7 @@ function parseImages(html, pageUrl) {
   return pages;
 }
 
-export default {
-  async fetch(request) {
+async function route(request) {
     const url = new URL(request.url);
 
     if (request.method === 'OPTIONS') {
@@ -375,29 +374,61 @@ export default {
       if (!target) return json({ error: 'Missing u parameter' }, 400);
       if (!isAllowedHost(target)) return json({ error: 'URL not allowed' }, 400);
 
-      try {
-        const res = await fetch(target, {
-          headers: {
-            'User-Agent': UA,
-            'Referer': refererFor(target),
-            'Accept': 'image/avif,image/webp,image/*,*/*;q=0.8'
-          }
-        });
-        if (!res.ok) return json({ error: `Image returned status: ${res.status}` }, res.status);
+      // Download the WHOLE image here before answering. Streaming it straight through meant that
+      // if the image site cut the connection part-way, the browser only saw a dropped connection
+      // ("Failed to fetch") and never the reason. Now every failure comes back as a readable error.
+      const referer = refererFor(target);
+      const tries = [referer, referer, ''];          // last try: no Referer at all
+      let failStatus = 502, failMsg = 'unknown error';
 
-        return new Response(res.body, {
-          status: 200,
-          headers: {
-            ...corsHeaders,
-            'Content-Type': res.headers.get('Content-Type') || 'application/octet-stream',
-            'Cache-Control': 'public, max-age=86400'
+      for (const ref of tries) {
+        try {
+          const headers = { 'User-Agent': UA, 'Accept': 'image/avif,image/webp,image/*,*/*;q=0.8' };
+          if (ref) headers['Referer'] = ref;
+          const res = await fetch(target, { headers });
+
+          if (!res.ok) {
+            failStatus = res.status >= 400 && res.status < 600 ? res.status : 502;
+            failMsg = `Image site returned status ${res.status}`;
+            if (res.status === 404) break;           // a missing file won't appear on retry
+            continue;
           }
-        });
-      } catch (e) {
-        return json({ error: e.message }, 502);
+
+          const buf = await res.arrayBuffer();
+          const type = (res.headers.get('Content-Type') || '').toLowerCase();
+          if (!buf.byteLength) { failStatus = 502; failMsg = 'Image site sent an empty file'; continue; }
+          if (type && !type.startsWith('image/') && !type.startsWith('application/octet-stream')) {
+            failStatus = 502;
+            failMsg = `Image site sent ${type.split(';')[0]} instead of an image (${buf.byteLength} bytes)`;
+            continue;
+          }
+
+          return new Response(buf, {
+            status: 200,
+            headers: {
+              ...corsHeaders,
+              'Content-Type': type || 'application/octet-stream',
+              'Cache-Control': 'public, max-age=86400'
+            }
+          });
+        } catch (e) {
+          failStatus = 502;
+          failMsg = `Could not download the image (${e.message})`;
+        }
       }
+      return json({ error: failMsg }, failStatus);
     }
 
     return new Response('Worker is running', { status: 200, headers: corsHeaders });
+}
+
+export default {
+  async fetch(request) {
+    try {
+      return await route(request);
+    } catch (e) {
+      // A crash would otherwise reach the browser without CORS headers and look like "Failed to fetch"
+      return json({ error: `Worker error: ${e.message}` }, 500);
+    }
   }
 };
