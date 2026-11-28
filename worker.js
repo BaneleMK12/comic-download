@@ -29,6 +29,31 @@ function siteOf(u) {
 
 const isAllowedHost = u => !!siteOf(u);
 
+// Read an image body, but give up if it is far bigger than any real manga page, so one
+// oversized or endless response can't make the Worker run out of memory and die silently.
+const MAX_IMAGE_BYTES = 30 * 1024 * 1024;
+const IMAGE_TIMEOUT_MS = 25000;
+
+async function readCapped(res, max) {
+  const declared = parseInt(res.headers.get('Content-Length') || '0', 10);
+  if (declared > max) throw new Error(`file is too large (${declared} bytes)`);
+  if (!res.body) return new Uint8Array(0);
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) { await reader.cancel(); throw new Error(`file is too large (over ${max} bytes)`); }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.byteLength; }
+  return out;
+}
+
 // Only return a cover picture that /img is allowed to fetch; otherwise the page shows its letter tile
 const coverOrEmpty = u => (u && isAllowedHost(u) ? u : '');
 
@@ -385,7 +410,7 @@ async function route(request) {
         try {
           const headers = { 'User-Agent': UA, 'Accept': 'image/avif,image/webp,image/*,*/*;q=0.8' };
           if (ref) headers['Referer'] = ref;
-          const res = await fetch(target, { headers });
+          const res = await fetch(target, { headers, signal: AbortSignal.timeout(IMAGE_TIMEOUT_MS) });
 
           if (!res.ok) {
             failStatus = res.status >= 400 && res.status < 600 ? res.status : 502;
@@ -394,7 +419,7 @@ async function route(request) {
             continue;
           }
 
-          const buf = await res.arrayBuffer();
+          const buf = await readCapped(res, MAX_IMAGE_BYTES);
           const type = (res.headers.get('Content-Type') || '').toLowerCase();
           if (!buf.byteLength) { failStatus = 502; failMsg = 'Image site sent an empty file'; continue; }
           if (type && !type.startsWith('image/') && !type.startsWith('application/octet-stream')) {
@@ -426,9 +451,10 @@ async function route(request) {
       const t0 = Date.now();
       try {
         const res = await fetch(target, {
-          headers: { 'User-Agent': UA, 'Referer': refererFor(target), 'Accept': 'image/avif,image/webp,image/*,*/*;q=0.8' }
+          headers: { 'User-Agent': UA, 'Referer': refererFor(target), 'Accept': 'image/avif,image/webp,image/*,*/*;q=0.8' },
+          signal: AbortSignal.timeout(IMAGE_TIMEOUT_MS)
         });
-        const buf = await res.arrayBuffer();
+        const buf = await readCapped(res, MAX_IMAGE_BYTES);
         return json({
           status: res.status,
           type: res.headers.get('Content-Type'),
@@ -442,7 +468,7 @@ async function route(request) {
       }
     }
 
-    return new Response('Worker is running (v4)', { status: 200, headers: corsHeaders });
+    return new Response('Worker is running (v5)', { status: 200, headers: corsHeaders });
 }
 
 export default {

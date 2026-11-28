@@ -818,7 +818,7 @@
             return `Worker check: HTTP ${d.status}, ${d.type || 'no type'}, ${d.bytes} bytes` +
                    (d.redirected ? `, redirected to ${d.finalHost}` : '');
         } catch (e) {
-            return 'Worker check unreachable: redeploy worker.js (open its address; it should say v4)';
+            return 'Worker check got no reply (is worker.js v5 deployed?)';
         }
     }
 
@@ -1127,35 +1127,79 @@
             let next = 0;
             setBtn(btn, `0/${total}`, 'busy', 0);
 
+            // Fetch (or load from the saved copy) one page; throws if it can't be had
+            async function getOne(i, list) {
+                const cached = await getPage(chapter.url, i);
+                if (cached) return cached;
+                const b = await requestRetry(
+                    `${PROXY_API_URL}/img?u=${encodeURIComponent(list[i])}`, {}, signal, res => res.blob());
+                await savePage(chapter.url, i, b);
+                return b;
+            }
+
+            // A page that fails no longer stops the others: failures are collected and handled below
+            const failed = [];
             async function runner() {
                 while (true) {
                     if (signal.aborted) return;
                     const i = next++;
                     if (i >= images.length) return;
-
-                    const cached = await getPage(chapter.url, i);
-                    if (cached) {
-                        blobs[i] = cached;
-                    } else {
-                        try {
-                            blobs[i] = await requestRetry(
-                                `${PROXY_API_URL}/img?u=${encodeURIComponent(images[i])}`, {}, signal, res => res.blob());
-                        } catch (e) {
-                            if (e.name === 'AbortError') throw e;
-                            // Prefer the Worker's own explanation; name the file so a failure can be traced
-                            let why = (e.body && e.body.error) || e.message;
-                            if (!e.body) why += ' | ' + await diagnose(images[i]);
-                            const file = decodeURIComponent((images[i].split('?')[0].split('/').pop()) || '');
-                            throw new Error(`Page ${i + 1} failed (${why})${file ? ' – ' + file : ''}`);
-                        }
-                        await savePage(chapter.url, i, blobs[i]);
+                    try {
+                        blobs[i] = await getOne(i, images);
+                        done++;
+                        setBtn(btn, `${done}/${total}`, 'busy', (done / total) * 100);
+                    } catch (e) {
+                        if (e.name === 'AbortError') throw e;
+                        failed.push({ i, e });
                     }
-                    done++;
-                    setBtn(btn, `${done}/${total}`, 'busy', (done / total) * 100);
                 }
             }
             await Promise.all(Array.from({ length: PARALLEL_IMAGES }, runner));
             if (signal.aborted) throw abortError();
+
+            // Some sites change their image addresses between requests. Ask for a fresh page list
+            // and try the failed pages once more with the new addresses.
+            if (failed.length && failed.length < images.length) {
+                setBtn(btn, 'Retrying...', 'busy', 100, 'Retrying failed pages…');
+                try {
+                    const fresh = await requestRetry(`${PROXY_API_URL}/images`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url: chapter.url })
+                    }, signal, res => res.json());
+                    if (fresh && fresh.success && Array.isArray(fresh.images) && fresh.images.length === images.length) {
+                        const still = [];
+                        for (const f of failed.splice(0)) {
+                            try {
+                                blobs[f.i] = await getOne(f.i, fresh.images);
+                                done++;
+                            } catch (e) {
+                                if (e.name === 'AbortError') throw e;
+                                still.push(f);
+                            }
+                        }
+                        failed.push(...still);
+                    }
+                } catch (e) {
+                    if (e.name === 'AbortError') throw e;   // otherwise keep the original failures
+                }
+            }
+
+            // Pages that still can't be downloaded are left out; say so clearly at the end.
+            let skippedNote = '';
+            if (failed.length) {
+                if (failed.length === images.length) {
+                    const e = failed[0].e;
+                    let why = (e.body && e.body.error) || e.message;
+                    if (!e.body) why += ' | ' + await diagnose(images[failed[0].i]);
+                    throw new Error(`No pages could be downloaded (${why})`);
+                }
+                failed.sort((a, b) => a.i - b.i);
+                const e = failed[0].e;
+                let why = (e.body && e.body.error) || e.message;
+                if (!e.body) why += ' | ' + await diagnose(images[failed[0].i]);
+                skippedNote = ` Skipped page${failed.length > 1 ? 's' : ''} ${failed.map(f => f.i + 1).join(', ')} that could not be downloaded (${why}).`;
+            }
 
             const safe = s => s.replace(/[\\/:*?"<>|]+/g, '').trim();
             const baseName = `${safe(mangaTitle)} - ${safe(chapter.title)}`;
@@ -1166,6 +1210,7 @@
                 const zip = new JSZip();
                 for (let i = 0; i < blobs.length; i++) {
                     if (signal.aborted) throw abortError();
+                    if (!blobs[i]) continue;   // skipped page
                     const ext = await imageExt(blobs[i], images[i]);
                     zip.file(String(i + 1).padStart(3, '0') + '.' + ext, blobs[i]);
                     blobs[i] = null; // JSZip keeps its own reference; release ours
@@ -1181,6 +1226,7 @@
                 const pdfDoc = await PDFLib.PDFDocument.create();
                 for (let i = 0; i < blobs.length; i++) {
                     if (signal.aborted) throw abortError();
+                    if (!blobs[i]) continue;   // skipped page
                     setBtn(btn, `PDF ${i + 1}/${blobs.length}`, 'busy', ((i + 1) / blobs.length) * 100, 'Building PDF…');
                     const img = await embedImage(pdfDoc, blobs[i], quality);
                     blobs[i] = null; // release memory as we go
@@ -1213,7 +1259,7 @@
             await clearChapterCache(chapter.url);
 
             setBtn(btn, 'Done', 'done', undefined, doneSub(fmt));
-            showStatus(`Downloaded ${chapter.title} (${images.length} pages) as ${fmt.toUpperCase()}`, 'success');
+            showStatus(`Downloaded ${chapter.title} (${images.length - failed.length} of ${images.length} pages) as ${fmt.toUpperCase()}.${skippedNote}`, 'success');
         } catch (err) {
             const cancelled = signal.aborted || err.name === 'AbortError';
             if (!cancelled) console.error(err);
