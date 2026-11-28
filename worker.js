@@ -419,7 +419,30 @@ async function route(request) {
       return json({ error: failMsg }, failStatus);
     }
 
-    return new Response('Worker is running', { status: 200, headers: corsHeaders });
+    // ---- /diag?u=...: say exactly what the image site sends back (for troubleshooting) ----
+    if (url.pathname === '/diag' && request.method === 'GET') {
+      const target = url.searchParams.get('u');
+      if (!target || !isAllowedHost(target)) return json({ fetchError: 'URL missing or not allowed' }, 400);
+      const t0 = Date.now();
+      try {
+        const res = await fetch(target, {
+          headers: { 'User-Agent': UA, 'Referer': refererFor(target), 'Accept': 'image/avif,image/webp,image/*,*/*;q=0.8' }
+        });
+        const buf = await res.arrayBuffer();
+        return json({
+          status: res.status,
+          type: res.headers.get('Content-Type'),
+          bytes: buf.byteLength,
+          redirected: res.redirected,
+          finalHost: new URL(res.url).hostname,
+          ms: Date.now() - t0
+        });
+      } catch (e) {
+        return json({ fetchError: e.message, ms: Date.now() - t0 });
+      }
+    }
+
+    return new Response('Worker is running (v4)', { status: 200, headers: corsHeaders });
 }
 
 export default {

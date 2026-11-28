@@ -809,6 +809,19 @@
         throw lastErr;
     }
 
+    // When a page fails with no reply from the Worker, ask the Worker what the image site says
+    async function diagnose(imgUrl) {
+        try {
+            const r = await fetch(`${PROXY_API_URL}/diag?u=${encodeURIComponent(imgUrl)}`);
+            const d = await r.json();
+            if (d.fetchError) return `Worker could not download it: ${d.fetchError}`;
+            return `Worker check: HTTP ${d.status}, ${d.type || 'no type'}, ${d.bytes} bytes` +
+                   (d.redirected ? `, redirected to ${d.finalHost}` : '');
+        } catch (e) {
+            return 'Worker check unreachable: redeploy worker.js (open its address; it should say v4)';
+        }
+    }
+
     // ---------- UI ----------
     document.getElementById('fetchBtn').addEventListener('click', fetchChapters);
     document.getElementById('mangaUrl').addEventListener('keydown', e => {
@@ -1130,7 +1143,8 @@
                         } catch (e) {
                             if (e.name === 'AbortError') throw e;
                             // Prefer the Worker's own explanation; name the file so a failure can be traced
-                            const why = (e.body && e.body.error) || e.message;
+                            let why = (e.body && e.body.error) || e.message;
+                            if (!e.body) why += ' | ' + await diagnose(images[i]);
                             const file = decodeURIComponent((images[i].split('?')[0].split('/').pop()) || '');
                             throw new Error(`Page ${i + 1} failed (${why})${file ? ' – ' + file : ''}`);
                         }
